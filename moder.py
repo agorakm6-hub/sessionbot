@@ -119,9 +119,8 @@ TEXTS = {
         "enter_reason": "Опишите суть жалобы:",
         "sent": "Ваша жалоба отправлена на рассмотрение.",
         "approved": "✅ Ваша жалоба принята!",
-        "approved_with_msg": "✅ Ваша жалоба принята!\n\nСообщение для вас: {msg}",
         "rejected": "❌ Ваша жалоба отклонена.",
-        "rejected_with_msg": "❌ Ваша жалоба отклонена, {msg}",
+        "rejected_with_msg": "❌ Ваша жалоба отклонена.\n\nПричина: {msg}",
         "cooldown": "⏳ Действует кулдаун. Подождите {minutes} мин.",
         "banned": "🚫 Вы заблокированы и не можете отправлять жалобы.",
         "blocked": (
@@ -130,6 +129,8 @@ TEXTS = {
             "действительно нарушает правила использования (ToS) и был заблокирован.\n\n"
             "Спасибо, что помогаете бороться с незаконным контентом!"
         ),
+        "reject_reason_prompt": "✏️ Напишите причину отказа для пользователя:",
+        "reject_reason_cancel": "Отмена",
     },
     "ua": {
         "choose_lang": "Оберіть мову:",
@@ -139,9 +140,8 @@ TEXTS = {
         "enter_reason": "Опишіть суть скарги:",
         "sent": "Вашу скаргу надіслано на розгляд.",
         "approved": "✅ Вашу скаргу прийнято!",
-        "approved_with_msg": "✅ Вашу скаргу прийнято!\n\nПовідомлення для вас: {msg}",
         "rejected": "❌ Вашу скаргу відхилено.",
-        "rejected_with_msg": "❌ Вашу скаргу відхилено, {msg}",
+        "rejected_with_msg": "❌ Вашу скаргу відхилено.\n\nПричина: {msg}",
         "cooldown": "⏳ Діє кулдаун. Зачекайте {minutes} хв.",
         "banned": "🚫 Вас заблоковано, ви не можете надсилати скарги.",
         "blocked": (
@@ -150,6 +150,8 @@ TEXTS = {
             "справді порушує правила використання (ToS) і було заблоковано.\n\n"
             "Дякуємо, що допомагаєте боротися з незаконним контентом!"
         ),
+        "reject_reason_prompt": "✏️ Напишіть причину відмови для користувача:",
+        "reject_reason_cancel": "Скасування",
     },
     "en": {
         "choose_lang": "Choose language:",
@@ -159,9 +161,8 @@ TEXTS = {
         "enter_reason": "Describe the violation:",
         "sent": "Your report has been sent for review.",
         "approved": "✅ Your report has been approved!",
-        "approved_with_msg": "✅ Your report has been approved!\n\nMessage for you: {msg}",
         "rejected": "❌ Your report has been rejected.",
-        "rejected_with_msg": "❌ Your report has been rejected, {msg}",
+        "rejected_with_msg": "❌ Your report has been rejected.\n\nReason: {msg}",
         "cooldown": "⏳ Cooldown active. Please wait {minutes} min.",
         "banned": "🚫 You are banned and cannot submit reports.",
         "blocked": (
@@ -170,6 +171,8 @@ TEXTS = {
             "does indeed violate the Terms of Service and has been blocked.\n\n"
             "Thank you for helping fight illegal content!"
         ),
+        "reject_reason_prompt": "✏️ Please enter the rejection reason for the user:",
+        "reject_reason_cancel": "Cancel",
     },
 }
 
@@ -188,7 +191,7 @@ class ReportForm(StatesGroup):
 
 
 class ModForm(StatesGroup):
-    waiting_msg = State()
+    waiting_reject_reason = State()
 
 
 router = Router()
@@ -255,6 +258,13 @@ def kb_report_detail(report_id: int, user_id: int) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="🚫 Канал/бот заблокирован", callback_data=f"mod_blocked_{report_id}")],
             [ban_btn],
             [InlineKeyboardButton(text="⬅️ К списку", callback_data="reports_list")],
+        ]
+    )
+
+def kb_cancel_reject(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=TEXTS[lang]["reject_reason_cancel"], callback_data="reject_cancel")]
         ]
     )
 
@@ -407,12 +417,13 @@ async def process_reason(message: Message, state: FSMContext) -> None:
         "mod_msg_id": None,
     }
 
-    # финальное сообщение пользователю — новое сообщение, затем чистим всё лишнее
-    await message.bot.edit_message_text(
-        TEXTS[lang]["sent"],
-        chat_id=message.chat.id,
-        message_id=msg_id
-    )
+    # Отправляем финальное сообщение пользователю
+    sent = await message.answer(TEXTS[lang]["sent"])
+    
+    # Сохраняем ID этого сообщения, чтобы не удалять его
+    await state.update_data(final_msg_id=sent.message_id)
+    
+    # Удаляем только предыдущие сообщения (ссылку и причину)
     await cleanup_tracked(message.bot, message.chat.id, state)
 
     LAST_REPORT_TIME[user.id] = datetime.utcnow()
@@ -456,6 +467,13 @@ async def cb_reports_list(callback: CallbackQuery) -> None:
 async def cb_noop(callback: CallbackQuery) -> None:
     await callback.answer()
 
+@router.callback_query(F.data == "reject_cancel")
+async def cb_reject_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    """Отмена ввода причины отказа"""
+    await state.clear()
+    await callback.message.delete()
+    await callback.answer("Отменено")
+
 @router.callback_query(F.data.startswith("view_"))
 async def cb_view_report(callback: CallbackQuery) -> None:
     rid = int(callback.data.split("_", 1)[1])
@@ -469,30 +487,104 @@ async def cb_view_report(callback: CallbackQuery) -> None:
 # ============ ДЕЙСТВИЯ МОДЕРАТОРОВ ============
 
 @router.callback_query(F.data.startswith("mod_approve_"))
-async def mod_approve(callback: CallbackQuery, state: FSMContext) -> None:
+async def mod_approve(callback: CallbackQuery) -> None:
+    """Принять жалобу сразу, без ввода сообщения"""
     rid = int(callback.data.split("_")[-1])
-    if rid not in REPORTS:
+    r = REPORTS.get(rid)
+    
+    if not r:
         await callback.answer("❌ Жалоба не найдена", show_alert=True)
         return
-
-    await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.answer("✏️ Напишите сообщение для пользователя (или отправьте «-» чтобы пропустить)", show_alert=False)
-
-    await state.update_data(action="approve", report_id=rid, panel_chat_id=callback.message.chat.id)
-    await state.set_state(ModForm.waiting_msg)
+    
+    lang = r.get("lang", "ru")
+    
+    try:
+        # Отправляем пользователю уведомление о принятии
+        await callback.bot.send_message(r["user_id"], TEXTS[lang]["approved"])
+        r["status"] = "approved"
+        
+        # Обновляем сообщение в чате модераторов
+        await callback.message.edit_text(
+            report_caption(rid, r) + "\n\n✅ Статус: ПРИНЯТА",
+            reply_markup=None
+        )
+        
+        logger.info(f"✅ Жалоба #{rid} принята модератором")
+        await callback.answer("✅ Жалоба принята")
+        
+    except Exception as e:
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
 
 @router.callback_query(F.data.startswith("mod_reject_"))
 async def mod_reject(callback: CallbackQuery, state: FSMContext) -> None:
+    """Отклонить жалобу с вводом причины"""
     rid = int(callback.data.split("_")[-1])
-    if rid not in REPORTS:
+    r = REPORTS.get(rid)
+    
+    if not r:
         await callback.answer("❌ Жалоба не найдена", show_alert=True)
         return
+    
+    lang = r.get("lang", "ru")
+    
+    # Сохраняем ID жалобы в состояние
+    await state.update_data(report_id=rid)
+    await state.set_state(ModForm.waiting_reject_reason)
+    
+    # Отправляем сообщение с запросом причины отказа
+    await callback.message.answer(
+        TEXTS[lang]["reject_reason_prompt"],
+        reply_markup=kb_cancel_reject(lang)
+    )
+    
+    await callback.answer()
 
-    await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.answer("✏️ Напишите сообщение для пользователя (или отправьте «-» чтобы пропустить)", show_alert=False)
+@router.message(ModForm.waiting_reject_reason, F.text)
+async def process_reject_reason(message: Message, state: FSMContext) -> None:
+    """Обработка причины отказа"""
+    data = await state.get_data()
+    rid = data.get("report_id")
+    r = REPORTS.get(rid)
+    
+    if not r:
+        await message.answer("❌ Жалоба не найдена")
+        await state.clear()
+        return
+    
+    lang = r.get("lang", "ru")
+    reason = message.text.strip()
+    
+    try:
+        # Отправляем пользователю уведомление с причиной отказа
+        await message.bot.send_message(
+            r["user_id"], 
+            TEXTS[lang]["rejected_with_msg"].format(msg=reason)
+        )
+        r["status"] = "rejected"
+        
+        # Обновляем сообщение в чате модераторов
+        await message.bot.edit_text(
+            chat_id=MOD_CHAT_ID,
+            message_id=r["mod_msg_id"],
+            text=report_caption(rid, r) + f"\n\n❌ Статус: ОТКЛОНЕНА\n\nПричина: {reason}",
+            reply_markup=None
+        )
+        
+        logger.info(f"❌ Жалоба #{rid} отклонена модератором. Причина: {reason}")
+        await message.answer(f"✅ Жалоба #{rid} отклонена. Причина отправлена пользователю.")
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
+    
+    await state.clear()
 
-    await state.update_data(action="reject", report_id=rid, panel_chat_id=callback.message.chat.id)
-    await state.set_state(ModForm.waiting_msg)
+@router.message(ModForm.waiting_reject_reason)
+async def process_reject_reason_invalid(message: Message) -> None:
+    """Игнорируем не-текстовые сообщения при ожидании причины отказа"""
+    try:
+        await message.delete()
+    except Exception:
+        pass
 
 @router.callback_query(F.data.startswith("mod_blocked_"))
 async def mod_blocked(callback: CallbackQuery) -> None:
@@ -512,6 +604,7 @@ async def mod_blocked(callback: CallbackQuery) -> None:
         r["status"] = "blocked"
         await callback.message.edit_text(
             report_caption(rid, r) + "\n\n🚫 Статус: заблокирован, пользователь уведомлён.",
+            reply_markup=None
         )
     except Exception as e:
         await callback.answer(f"Ошибка отправки: {e}", show_alert=True)
@@ -559,59 +652,6 @@ async def mod_unban(callback: CallbackQuery) -> None:
 
     await callback.answer("✅ Пользователь разбанен")
 
-@router.message(ModForm.waiting_msg, F.text)
-async def process_moderator_msg(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    action = data.get("action")
-    rid = data.get("report_id")
-    panel_chat_id = data.get("panel_chat_id")
-
-    r = REPORTS.get(rid)
-    moderator_msg = message.text.strip()
-
-    try:
-        await message.delete()
-    except Exception:
-        pass
-
-    if not r:
-        await message.answer("❌ Жалоба не найдена (возможно, уже обработана)")
-        await state.clear()
-        return
-
-    lang = r.get("lang", "ru")
-    skip = moderator_msg in ("-", "Отмена", "/cancel", "")
-
-    try:
-        if action == "approve":
-            text = TEXTS[lang]["approved"] if skip else TEXTS[lang]["approved_with_msg"].format(msg=moderator_msg)
-            await message.bot.send_message(r["user_id"], text)
-            r["status"] = "approved"
-            status_line = "✅ Статус: принята, пользователь уведомлён."
-        else:
-            text = TEXTS[lang]["rejected"] if skip else TEXTS[lang]["rejected_with_msg"].format(msg=moderator_msg)
-            await message.bot.send_message(r["user_id"], text)
-            r["status"] = "rejected"
-            status_line = "❌ Статус: отклонена, пользователь уведомлён."
-
-        if panel_chat_id:
-            try:
-                await message.bot.send_message(panel_chat_id, f"{report_caption(rid, r)}\n\n{status_line}")
-            except Exception:
-                pass
-
-    except Exception as e:
-        await message.answer(f"❌ Ошибка отправки пользователю: {e}")
-
-    await state.clear()
-
-@router.message(ModForm.waiting_msg)
-async def process_moderator_msg_invalid(message: Message) -> None:
-    try:
-        await message.delete()
-    except Exception:
-        pass
-
 # ============ WEBHOOK ============
 
 async def webhook_handler(request: web.Request) -> web.Response:
@@ -628,11 +668,7 @@ async def health_check(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok", "bot": "running"})
 
 async def keep_alive_loop() -> None:
-    """Пингует сам себя, чтобы бесплатный Render-инстанс не засыпал.
-
-    Пингует чаще и с повторными попытками при неудаче, чтобы минимизировать
-    риск того, что инстанс всё же уснёт из-за пропущенного пинга.
-    """
+    """Пингует сам себя, чтобы бесплатный Render-инстанс не засыпал."""
     hostname = os.getenv("RENDER_EXTERNAL_HOSTNAME")
     if not hostname:
         logger.info("ℹ️ RENDER_EXTERNAL_HOSTNAME не задан — keep-alive пинг отключён")
@@ -655,7 +691,7 @@ async def keep_alive_loop() -> None:
                     await asyncio.sleep(5)
             if not success:
                 logger.error("❌ Keep-alive: все попытки пинга провалились в этом цикле")
-            await asyncio.sleep(150)  # каждые 2.5 минуты — с запасом до 15-минутного лимита простоя Render
+            await asyncio.sleep(150)
 
 async def on_startup(app: web.Application) -> None:
     webhook_url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME', 'localhost')}{WEBHOOK_PATH}"
