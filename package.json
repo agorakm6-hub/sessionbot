@@ -1,21 +1,12 @@
 {
   "name": "complaint-bot",
   "version": "1.0.0",
-  "main": "dist/index.js",
   "scripts": {
-    "build": "tsc",
-    "start": "node dist/index.js",
-    "dev": "ts-node src/index.ts"
+    "start": "node index.js"
   },
   "dependencies": {
     "node-telegram-bot-api": "^0.61.0",
     "ioredis": "^5.3.2",
     "dotenv": "^16.3.1"
-  },
-  "devDependencies": {
-    "@types/node-telegram-bot-api": "^0.61.5",
-    "@types/node": "^20.6.0",
-    "typescript": "^5.2.2",
-    "ts-node": "^10.9.1"
   }
 }
