@@ -44,7 +44,7 @@ MOD_CHAT_ID = -1004354663980
 COOLDOWN_MINUTES = 30
 COOLDOWN_SECONDS = COOLDOWN_MINUTES * 60
 
-# Путь к аватарке бота (абсолютный путь)
+# Путь к аватарке бота - JPG
 BOT_AVATAR = os.path.join(os.path.dirname(__file__), "ava.jpg")
 
 # Проверяем существование файла
@@ -611,38 +611,50 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 
 @router.callback_query(F.data.startswith("lang_"))
 async def process_lang(callback: CallbackQuery, state: FSMContext) -> None:
+    # ВАЖНО: сначала отвечаем на callback
+    await callback.answer()
+    
     if not BOT_ENABLED:
-        await callback.answer("Бот отключен", show_alert=True)
+        await callback.message.answer("Бот отключен")
         return
     
     lang = callback.data.split("_", 1)[1]
     await state.update_data(lang=lang)
     
+    # Удаляем старое сообщение
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    
+    # Отправляем новое с аватаркой
     if BOT_AVATAR and os.path.exists(BOT_AVATAR):
         try:
             photo = FSInputFile(BOT_AVATAR)
-            await callback.message.edit_media(
-                media=photo,
+            await callback.message.answer_photo(
+                photo=photo,
                 caption=TEXTS[lang]["confirm_bot"],
                 reply_markup=kb_confirm_human(lang)
             )
         except Exception as e:
-            logger.error(f"Ошибка редактирования фото: {e}")
-            await callback.message.edit_text(
+            logger.error(f"Ошибка отправки фото: {e}")
+            await callback.message.answer(
                 TEXTS[lang]["confirm_bot"],
                 reply_markup=kb_confirm_human(lang)
             )
     else:
-        await callback.message.edit_text(
+        await callback.message.answer(
             TEXTS[lang]["confirm_bot"],
             reply_markup=kb_confirm_human(lang)
         )
-    await callback.answer()
 
 @router.callback_query(F.data == "confirm_human")
 async def process_confirm_human(callback: CallbackQuery, state: FSMContext) -> None:
+    # ВАЖНО: сначала отвечаем на callback
+    await callback.answer()
+    
     if not BOT_ENABLED:
-        await callback.answer("Бот отключен", show_alert=True)
+        await callback.message.answer("Бот отключен")
         return
     
     data = await state.get_data()
@@ -651,55 +663,71 @@ async def process_confirm_human(callback: CallbackQuery, state: FSMContext) -> N
     USER_PREFS[callback.from_user.id] = {"lang": lang, "confirmed": True}
     await state.update_data(lang=lang)
     
-    await callback.message.delete()
+    # Удаляем сообщение с подтверждением
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    
     await show_main_menu(callback.message, state)
-    await callback.answer()
 
 @router.callback_query(F.data == "appeal_yes")
 async def appeal_yes(callback: CallbackQuery, state: FSMContext) -> None:
+    # ВАЖНО: сначала отвечаем на callback
+    await callback.answer()
+    
     if not BOT_ENABLED:
-        await callback.answer("Бот отключен", show_alert=True)
+        await callback.message.answer("Бот отключен")
         return
     
     user_id = callback.from_user.id
     
     if user_id not in BANNED_USERS:
-        await callback.answer("Вы не в бане", show_alert=True)
+        await callback.message.answer("Вы не в бане")
         return
     
     if BANNED_USERS[user_id].get("permanent", False):
-        await callback.answer("Вы в вечном бане, апелляция невозможна", show_alert=True)
+        await callback.message.answer("Вы в вечном бане, апелляция невозможна")
         return
     
     if BANNED_USERS[user_id].get("appeal_sent", False):
         lang = BANNED_USERS[user_id].get("lang", "ru")
-        await callback.answer(TEXTS[lang]["appeal_already_sent"], show_alert=True)
+        await callback.message.answer(TEXTS[lang]["appeal_already_sent"])
         return
     
     data = await state.get_data()
     lang = data.get("lang", "ru")
     
-    await callback.message.delete()
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    
     sent = await callback.message.answer(
         TEXTS[lang]["appeal_prompt"],
         reply_markup=kb_back_to_menu(lang)
     )
     await state.update_data(msg_id=sent.message_id)
     await state.set_state(AppealForm.waiting_appeal_text)
-    await callback.answer()
 
 @router.callback_query(F.data == "appeal_no")
 async def appeal_no(callback: CallbackQuery, state: FSMContext) -> None:
+    # ВАЖНО: сначала отвечаем на callback
+    await callback.answer()
+    
     if not BOT_ENABLED:
-        await callback.answer("Бот отключен", show_alert=True)
+        await callback.message.answer("Бот отключен")
         return
     
     data = await state.get_data()
     lang = data.get("lang", "ru")
     
-    await callback.message.delete()
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    
     await show_main_menu(callback.message, state)
-    await callback.answer()
 
 @router.message(AppealForm.waiting_appeal_text, F.text)
 async def process_appeal(message: Message, state: FSMContext) -> None:
@@ -772,8 +800,11 @@ async def process_appeal_invalid(message: Message) -> None:
 
 @router.callback_query(F.data == "menu_back")
 async def menu_back(callback: CallbackQuery, state: FSMContext) -> None:
+    # ВАЖНО: сначала отвечаем на callback
+    await callback.answer()
+    
     if not BOT_ENABLED:
-        await callback.answer("Бот отключен", show_alert=True)
+        await callback.message.answer("Бот отключен")
         return
     
     data = await state.get_data()
@@ -782,14 +813,20 @@ async def menu_back(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await state.update_data(lang=lang)
     
-    await callback.message.delete()
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    
     await show_main_menu(callback.message, state)
-    await callback.answer()
 
 @router.callback_query(F.data == "menu_report")
 async def menu_report(callback: CallbackQuery, state: FSMContext) -> None:
+    # ВАЖНО: сначала отвечаем на callback
+    await callback.answer()
+    
     if not BOT_ENABLED:
-        await callback.answer("Бот отключен", show_alert=True)
+        await callback.message.answer("Бот отключен")
         return
     
     user_id = callback.from_user.id
@@ -797,38 +834,47 @@ async def menu_report(callback: CallbackQuery, state: FSMContext) -> None:
     lang = data.get("lang", "ru")
     
     if user_id in BANNED_USERS:
-        await callback.answer(TEXTS[lang]["banned"], show_alert=True)
+        await callback.message.answer(TEXTS[lang]["banned"])
         return
     
     remaining = get_cooldown_remaining_minutes(user_id)
     if remaining > 0:
-        await callback.answer(TEXTS[lang]["cooldown"].format(minutes=remaining), show_alert=True)
+        await callback.message.answer(TEXTS[lang]["cooldown"].format(minutes=remaining))
         return
     
-    await callback.message.delete()
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    
     sent = await callback.message.answer(TEXTS[lang]["enter_link"], reply_markup=kb_back_to_menu(lang))
     await state.update_data(msg_id=sent.message_id)
     await state.set_state(ReportForm.link)
-    await callback.answer()
 
 @router.callback_query(F.data == "menu_question")
 async def menu_question(callback: CallbackQuery, state: FSMContext) -> None:
+    # ВАЖНО: сначала отвечаем на callback
+    await callback.answer()
+    
     if not BOT_ENABLED:
-        await callback.answer("Бот отключен", show_alert=True)
+        await callback.message.answer("Бот отключен")
         return
     
     data = await state.get_data()
     lang = data.get("lang", "ru")
     
     if callback.from_user.id in BANNED_USERS:
-        await callback.answer(TEXTS[lang]["banned"], show_alert=True)
+        await callback.message.answer(TEXTS[lang]["banned"])
         return
     
-    await callback.message.delete()
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    
     sent = await callback.message.answer(TEXTS[lang]["question_prompt"], reply_markup=kb_back_to_menu(lang))
     await state.update_data(msg_id=sent.message_id)
     await state.set_state(QuestionForm.question)
-    await callback.answer()
 
 @router.message(ReportForm.link, F.text)
 async def process_link(message: Message, state: FSMContext) -> None:
@@ -1044,9 +1090,12 @@ async def cmd_send(message: Message, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "broadcast_cancel")
 async def cb_broadcast_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
     await state.clear()
-    await callback.message.delete()
-    await callback.answer("Отменено")
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
 
 @router.message(ModForm.waiting_broadcast, F.text)
 async def process_broadcast(message: Message, state: FSMContext) -> None:
@@ -1085,8 +1134,8 @@ async def process_broadcast_invalid(message: Message) -> None:
 
 @router.callback_query(F.data == "reports_list")
 async def cb_reports_list(callback: CallbackQuery) -> None:
-    await callback.message.edit_text("📋 Список активных жалоб:", reply_markup=kb_reports_list())
     await callback.answer()
+    await callback.message.edit_text("📋 Список активных жалоб:", reply_markup=kb_reports_list())
 
 @router.callback_query(F.data == "noop")
 async def cb_noop(callback: CallbackQuery) -> None:
@@ -1094,30 +1143,37 @@ async def cb_noop(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "reject_cancel")
 async def cb_reject_cancel(callback: CallbackQuery, state: FSMContext) -> None:
-    await state.clear()
-    await callback.message.delete()
     await callback.answer("Отменено")
+    await state.clear()
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
 
 @router.callback_query(F.data == "question_reply_cancel")
 async def cb_question_reply_cancel(callback: CallbackQuery, state: FSMContext) -> None:
-    await state.clear()
-    await callback.message.delete()
     await callback.answer("Отменено")
+    await state.clear()
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
 
 @router.callback_query(F.data.startswith("view_"))
 async def cb_view_report(callback: CallbackQuery) -> None:
+    await callback.answer()
     rid = int(callback.data.split("_", 1)[1])
     r = REPORTS.get(rid)
     if not r:
-        await callback.answer("Жалоба не найдена", show_alert=True)
+        await callback.message.answer("Жалоба не найдена")
         return
     await callback.message.edit_text(report_caption(rid, r), reply_markup=kb_report_detail(rid, r["user_id"]))
-    await callback.answer()
 
 # ============ ДЕЙСТВИЯ МОДЕРАТОРОВ С БАНОМ ============
 
 @router.callback_query(F.data.startswith("ban_unban_"))
 async def ban_unban_user(callback: CallbackQuery) -> None:
+    await callback.answer()
     user_id = int(callback.data.split("_")[-1])
     
     if user_id in BANNED_USERS:
@@ -1130,23 +1186,26 @@ async def ban_unban_user(callback: CallbackQuery) -> None:
         except Exception:
             pass
         
-        await callback.answer("✅ Пользователь разбанен")
-        await callback.message.delete()
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
         
         if BANNED_USERS:
             await callback.message.answer("📋 Список забаненных пользователей:", reply_markup=kb_banned_list())
         else:
             await callback.message.answer("📋 Список забаненных пользователей пуст")
     else:
-        await callback.answer("❌ Пользователь не в бане", show_alert=True)
+        await callback.message.answer("❌ Пользователь не в бане")
 
 @router.callback_query(F.data.startswith("appeal_approve_"))
 async def appeal_approve(callback: CallbackQuery) -> None:
+    await callback.answer()
     aid = int(callback.data.split("_")[-1])
     appeal = APPEALS.get(aid)
     
     if not appeal:
-        await callback.answer("❌ Апелляция не найдена", show_alert=True)
+        await callback.message.answer("❌ Апелляция не найдена")
         return
     
     user_id = appeal["user_id"]
@@ -1165,18 +1224,16 @@ async def appeal_approve(callback: CallbackQuery) -> None:
         )
         logger.info(f"✅ Апелляция #{aid} одобрена, пользователь {user_id} разблокирован")
     except Exception as e:
-        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
-        return
-    
-    await callback.answer("✅ Апелляция одобрена")
+        await callback.message.answer(f"❌ Ошибка: {e}")
 
 @router.callback_query(F.data.startswith("appeal_reject_"))
 async def appeal_reject(callback: CallbackQuery) -> None:
+    await callback.answer()
     aid = int(callback.data.split("_")[-1])
     appeal = APPEALS.get(aid)
     
     if not appeal:
-        await callback.answer("❌ Апелляция не найдена", show_alert=True)
+        await callback.message.answer("❌ Апелляция не найдена")
         return
     
     user_id = appeal["user_id"]
@@ -1196,20 +1253,18 @@ async def appeal_reject(callback: CallbackQuery) -> None:
         )
         logger.info(f"❌ Апелляция #{aid} отклонена, пользователь {user_id} в вечном бане")
     except Exception as e:
-        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
-        return
-    
-    await callback.answer("❌ Апелляция отклонена")
+        await callback.message.answer(f"❌ Ошибка: {e}")
 
 # ============ ДЕЙСТВИЯ МОДЕРАТОРОВ С ЖАЛОБАМИ ============
 
 @router.callback_query(F.data.startswith("mod_approve_"))
 async def mod_approve(callback: CallbackQuery) -> None:
+    await callback.answer()
     rid = int(callback.data.split("_")[-1])
     r = REPORTS.get(rid)
     
     if not r:
-        await callback.answer("❌ Жалоба не найдена", show_alert=True)
+        await callback.message.answer("❌ Жалоба не найдена")
         return
     
     lang = r.get("lang", "ru")
@@ -1224,18 +1279,17 @@ async def mod_approve(callback: CallbackQuery) -> None:
         )
         
         logger.info(f"✅ Жалоба #{rid} принята модератором")
-        await callback.answer("✅ Жалоба принята")
-        
     except Exception as e:
-        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+        await callback.message.answer(f"❌ Ошибка: {e}")
 
 @router.callback_query(F.data.startswith("mod_reject_"))
 async def mod_reject(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
     rid = int(callback.data.split("_")[-1])
     r = REPORTS.get(rid)
     
     if not r:
-        await callback.answer("❌ Жалоба не найдена", show_alert=True)
+        await callback.message.answer("❌ Жалоба не найдена")
         return
     
     lang = r.get("lang", "ru")
@@ -1247,7 +1301,6 @@ async def mod_reject(callback: CallbackQuery, state: FSMContext) -> None:
         TEXTS[lang]["reject_reason_prompt"],
         reply_markup=kb_cancel_reject(lang)
     )
-    await callback.answer()
 
 @router.message(ModForm.waiting_reject_reason, F.text)
 async def process_reject_reason(message: Message, state: FSMContext) -> None:
@@ -1294,10 +1347,11 @@ async def process_reject_reason_invalid(message: Message) -> None:
 
 @router.callback_query(F.data.startswith("mod_blocked_"))
 async def mod_blocked(callback: CallbackQuery) -> None:
+    await callback.answer()
     rid = int(callback.data.split("_")[-1])
     r = REPORTS.get(rid)
     if not r:
-        await callback.answer("❌ Жалоба не найдена", show_alert=True)
+        await callback.message.answer("❌ Жалоба не найдена")
         return
 
     lang = r.get("lang", "ru")
@@ -1313,17 +1367,15 @@ async def mod_blocked(callback: CallbackQuery) -> None:
             reply_markup=None
         )
     except Exception as e:
-        await callback.answer(f"Ошибка отправки: {e}", show_alert=True)
-        return
-
-    await callback.answer("Готово")
+        await callback.message.answer(f"Ошибка отправки: {e}")
 
 @router.callback_query(F.data.startswith("mod_ban_"))
 async def mod_ban(callback: CallbackQuery) -> None:
+    await callback.answer()
     rid = int(callback.data.split("_")[-1])
     r = REPORTS.get(rid)
     if not r:
-        await callback.answer("❌ Жалоба не найдена", show_alert=True)
+        await callback.message.answer("❌ Жалоба не найдена")
         return
 
     user_id = r["user_id"]
@@ -1354,14 +1406,13 @@ async def mod_ban(callback: CallbackQuery) -> None:
         except Exception:
             pass
 
-    await callback.answer("🚫 Пользователь забанен")
-
 @router.callback_query(F.data.startswith("mod_unban_"))
 async def mod_unban(callback: CallbackQuery) -> None:
+    await callback.answer()
     rid = int(callback.data.split("_")[-1])
     r = REPORTS.get(rid)
     if not r:
-        await callback.answer("❌ Жалоба не найдена", show_alert=True)
+        await callback.message.answer("❌ Жалоба не найдена")
         return
 
     user_id = r["user_id"]
@@ -1382,17 +1433,16 @@ async def mod_unban(callback: CallbackQuery) -> None:
         except Exception:
             pass
 
-    await callback.answer("✅ Пользователь разбанен")
-
 # ============ ОТВЕТЫ НА ВОПРОСЫ ============
 
 @router.callback_query(F.data.startswith("mod_question_reply_"))
 async def mod_question_reply(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
     qid = int(callback.data.split("_")[-1])
     q = QUESTIONS.get(qid)
     
     if not q:
-        await callback.answer("❌ Вопрос не найден", show_alert=True)
+        await callback.message.answer("❌ Вопрос не найден")
         return
     
     lang = q.get("lang", "ru")
@@ -1404,7 +1454,6 @@ async def mod_question_reply(callback: CallbackQuery, state: FSMContext) -> None
         TEXTS[lang]["question_reply_prompt"],
         reply_markup=kb_cancel_question_reply(lang)
     )
-    await callback.answer()
 
 @router.message(ModForm.waiting_question_reply, F.text)
 async def process_question_reply(message: Message, state: FSMContext) -> None:
