@@ -11,6 +11,7 @@ Telegram-бот для приёма жалоб с модерацией
 
 import asyncio
 import logging
+import math
 import os
 import sys
 from datetime import datetime
@@ -44,6 +45,10 @@ WEB_SERVER_PORT = int(os.getenv("PORT", "10000"))
 # ID чата модераторов
 MOD_CHAT_ID = -1004354663980
 
+# Кулдаун между жалобами (в минутах)
+COOLDOWN_MINUTES = 30
+COOLDOWN_SECONDS = COOLDOWN_MINUTES * 60
+
 # ============ ЛОГИРОВАНИЕ ============
 
 logging.basicConfig(
@@ -57,11 +62,50 @@ logger = logging.getLogger(__name__)
 REPORTS: dict[int, dict] = {}
 _REPORT_COUNTER = 0
 
+# user_id -> {"lang": str, "confirmed": bool}  — запоминаем язык и подтверждение "не робот"
+USER_PREFS: dict[int, dict] = {}
+
+# user_id -> datetime последней отправленной жалобы (для кулдауна)
+LAST_REPORT_TIME: dict[int, datetime] = {}
+
+# set забаненных пользователей (не могут отправлять жалобы)
+BANNED_USERS: set[int] = set()
+
 
 def next_report_id() -> int:
     global _REPORT_COUNTER
     _REPORT_COUNTER += 1
     return _REPORT_COUNTER
+
+
+def get_cooldown_remaining_minutes(user_id: int) -> int:
+    """Сколько минут осталось до конца кулдауна (0, если кулдаун не активен)."""
+    last = LAST_REPORT_TIME.get(user_id)
+    if not last:
+        return 0
+    elapsed = (datetime.utcnow() - last).total_seconds()
+    remaining = COOLDOWN_SECONDS - elapsed
+    if remaining <= 0:
+        return 0
+    return math.ceil(remaining / 60)
+
+
+def detect_target_type(link: str) -> str:
+    """Определяет тип нарушителя по ссылке: bot / channel_chat / site."""
+    raw = link.strip()
+    username = raw.lstrip("@").split("/")[-1] if not raw.lower().startswith(("http://", "https://")) else raw
+    # юзернейм бота обычно заканчивается на "bot"
+    bare = raw.lstrip("@")
+    if bare.lower().endswith("bot") and "/" not in bare and "." not in bare:
+        return "bot"
+    lowered = raw.lower()
+    if lowered.startswith("https://t.me/") or lowered.startswith("http://t.me/") or lowered.startswith("t.me/"):
+        # username ссылки на бота вида t.me/name_bot
+        tail = lowered.rsplit("/", 1)[-1]
+        if tail.endswith("bot"):
+            return "bot"
+        return "channel_chat"
+    return "site"
 
 
 # ============ ТЕКСТЫ ============
@@ -71,17 +115,19 @@ TEXTS = {
         "choose_lang": "Выберите язык:",
         "confirm_bot": "Подтвердите, что вы не робот:",
         "confirm_bot_btn": "Я не робот 🤖",
-        "enter_link": "Введите ссылку на нарушение (канал, чат, сайт, юзернейм и т.д.):",
+        "enter_link": "Введите ссылку на нарушающий материал:",
         "enter_reason": "Опишите суть жалобы:",
-        "sent": "✅ Ваша жалоба отправлена модераторам и будет рассмотрена.",
+        "sent": "Ваша жалоба отправлена на рассмотрение.",
         "approved": "✅ Ваша жалоба принята!",
         "approved_with_msg": "✅ Ваша жалоба принята!\n\nСообщение для вас: {msg}",
         "rejected": "❌ Ваша жалоба отклонена.",
-        "rejected_with_msg": "❌ Ваша жалоба отклонена.\n\nСообщение для вас: {msg}",
+        "rejected_with_msg": "❌ Ваша жалоба отклонена, {msg}",
+        "cooldown": "⏳ Действует кулдаун. Подождите {minutes} мин.",
+        "banned": "🚫 Вы заблокированы и не можете отправлять жалобы.",
         "blocked": (
             "Здравствуйте! Вы отправили жалобу на:\n{link}\n\n"
-            "После тщательного расследования мы пришли к выводу, что данный канал/бот/сайт "
-            "действительно нарушает правила использования (ToS), и он был заблокирован.\n\n"
+            "После тщательного расследования мы пришли к выводу, что {type} "
+            "действительно нарушает правила использования (ToS) и был заблокирован.\n\n"
             "Спасибо, что помогаете бороться с незаконным контентом!"
         ),
     },
@@ -89,17 +135,19 @@ TEXTS = {
         "choose_lang": "Оберіть мову:",
         "confirm_bot": "Підтвердіть, що ви не робот:",
         "confirm_bot_btn": "Я не робот 🤖",
-        "enter_link": "Введіть посилання на порушення (канал, чат, сайт, юзернейм тощо):",
+        "enter_link": "Введіть посилання на матеріал, що порушує правила:",
         "enter_reason": "Опишіть суть скарги:",
-        "sent": "✅ Вашу скаргу надіслано модераторам, її розглянуть.",
+        "sent": "Вашу скаргу надіслано на розгляд.",
         "approved": "✅ Вашу скаргу прийнято!",
         "approved_with_msg": "✅ Вашу скаргу прийнято!\n\nПовідомлення для вас: {msg}",
         "rejected": "❌ Вашу скаргу відхилено.",
-        "rejected_with_msg": "❌ Вашу скаргу відхилено.\n\nПовідомлення для вас: {msg}",
+        "rejected_with_msg": "❌ Вашу скаргу відхилено, {msg}",
+        "cooldown": "⏳ Діє кулдаун. Зачекайте {minutes} хв.",
+        "banned": "🚫 Вас заблоковано, ви не можете надсилати скарги.",
         "blocked": (
             "Вітаємо! Ви надіслали скаргу на:\n{link}\n\n"
-            "Після ретельного розслідування ми дійшли висновку, що цей канал/бот/сайт "
-            "справді порушує правила використання (ToS), і його було заблоковано.\n\n"
+            "Після ретельного розслідування ми дійшли висновку, що {type} "
+            "справді порушує правила використання (ToS) і було заблоковано.\n\n"
             "Дякуємо, що допомагаєте боротися з незаконним контентом!"
         ),
     },
@@ -107,20 +155,29 @@ TEXTS = {
         "choose_lang": "Choose language:",
         "confirm_bot": "Please confirm you're not a robot:",
         "confirm_bot_btn": "I'm not a robot 🤖",
-        "enter_link": "Enter the violation link (channel, chat, website, username, etc.):",
+        "enter_link": "Enter the link to the violating content:",
         "enter_reason": "Describe the violation:",
-        "sent": "✅ Your report has been sent to moderators.",
+        "sent": "Your report has been sent for review.",
         "approved": "✅ Your report has been approved!",
         "approved_with_msg": "✅ Your report has been approved!\n\nMessage for you: {msg}",
         "rejected": "❌ Your report has been rejected.",
-        "rejected_with_msg": "❌ Your report has been rejected.\n\nMessage for you: {msg}",
+        "rejected_with_msg": "❌ Your report has been rejected, {msg}",
+        "cooldown": "⏳ Cooldown active. Please wait {minutes} min.",
+        "banned": "🚫 You are banned and cannot submit reports.",
         "blocked": (
             "Hello! You submitted a report on:\n{link}\n\n"
-            "After a thorough investigation we concluded that the reported channel/bot/website "
-            "does indeed violate the Terms of Service, and it has been blocked.\n\n"
+            "After a thorough investigation we concluded that the reported {type} "
+            "does indeed violate the Terms of Service and has been blocked.\n\n"
             "Thank you for helping fight illegal content!"
         ),
     },
+}
+
+# Название типа нарушителя для подстановки в текст "blocked" (в середине предложения)
+TARGET_TYPE_NOUN = {
+    "ru": {"bot": "бот", "channel_chat": "канал/чат", "site": "сайт"},
+    "ua": {"bot": "бот", "channel_chat": "канал/чат", "site": "сайт"},
+    "en": {"bot": "bot", "channel_chat": "channel/chat", "site": "website"},
 }
 
 # ============ СОСТОЯНИЯ ============
@@ -154,13 +211,20 @@ def kb_confirm_human(lang: str) -> InlineKeyboardMarkup:
         ]
     )
 
-def kb_moderator_actions(report_id: int) -> InlineKeyboardMarkup:
+def kb_moderator_actions(report_id: int, user_id: int) -> InlineKeyboardMarkup:
+    banned = user_id in BANNED_USERS
+    ban_btn = (
+        InlineKeyboardButton(text="✅ Разбанить", callback_data=f"mod_unban_{report_id}")
+        if banned
+        else InlineKeyboardButton(text="🚫 Забанить", callback_data=f"mod_ban_{report_id}")
+    )
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(text="✅ Принять", callback_data=f"mod_approve_{report_id}"),
                 InlineKeyboardButton(text="❌ Отклонить", callback_data=f"mod_reject_{report_id}"),
-            ]
+            ],
+            [ban_btn],
         ]
     )
 
@@ -175,7 +239,13 @@ def kb_reports_list() -> InlineKeyboardMarkup:
         rows = [[InlineKeyboardButton(text="Нет активных жалоб", callback_data="noop")]]
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
-def kb_report_detail(report_id: int) -> InlineKeyboardMarkup:
+def kb_report_detail(report_id: int, user_id: int) -> InlineKeyboardMarkup:
+    banned = user_id in BANNED_USERS
+    ban_btn = (
+        InlineKeyboardButton(text="✅ Разбанить", callback_data=f"mod_unban_{report_id}")
+        if banned
+        else InlineKeyboardButton(text="🚫 Забанить", callback_data=f"mod_ban_{report_id}")
+    )
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -183,6 +253,7 @@ def kb_report_detail(report_id: int) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="❌ Отклонить", callback_data=f"mod_reject_{report_id}"),
             ],
             [InlineKeyboardButton(text="🚫 Канал/бот заблокирован", callback_data=f"mod_blocked_{report_id}")],
+            [ban_btn],
             [InlineKeyboardButton(text="⬅️ К списку", callback_data="reports_list")],
         ]
     )
@@ -214,12 +285,13 @@ def report_caption(rid: int, r: dict) -> str:
         f"🆔 ID: {r['user_id']}\n\n"
         f"🔗 Ссылка: {r['link']}\n"
         f"📝 Текст: {r['reason']}"
-    )
-
-# ============ ХЕНДЛЕРЫ ПОЛЬЗОВАТЕЛЯ ============
+)
+    # ============ ХЕНДЛЕРЫ ПОЛЬЗОВАТЕЛЯ ============
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext) -> None:
+    user_id = message.from_user.id
+
     # чистим всё, что осталось от прошлой сессии, если она была
     await cleanup_tracked(message.bot, message.chat.id, state)
     try:
@@ -228,13 +300,39 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
         pass
     await state.clear()
 
+    prefs = USER_PREFS.get(user_id)
+    lang = prefs["lang"] if prefs else "ru"
+
+    # забаненный пользователь не может отправлять жалобы
+    if user_id in BANNED_USERS:
+        sent = await message.answer(TEXTS[lang]["banned"])
+        await track(state, sent.message_id)
+        return
+
+    # проверка кулдауна
+    remaining = get_cooldown_remaining_minutes(user_id)
+    if remaining > 0:
+        sent = await message.answer(TEXTS[lang]["cooldown"].format(minutes=remaining))
+        await track(state, sent.message_id)
+        return
+
+    # если пользователь уже выбирал язык и подтверждал "не робот" — сразу к вводу ссылки
+    if prefs and prefs.get("confirmed"):
+        await state.update_data(lang=lang)
+        sent = await message.answer(TEXTS[lang]["enter_link"])
+        await track(state, sent.message_id)
+        await state.update_data(msg_id=sent.message_id)
+        await state.set_state(ReportForm.link)
+        logger.info(f"👤 Пользователь {user_id} запустил бота (повтор, lang={lang})")
+        return
+
     sent = await message.answer(
         "Выберите язык: / Оберіть мову: / Choose language:",
         reply_markup=kb_language(),
     )
     await track(state, sent.message_id)
     await state.update_data(msg_id=sent.message_id)
-    logger.info(f"👤 Пользователь {message.from_user.id} запустил бота")
+    logger.info(f"👤 Пользователь {user_id} запустил бота")
 
 @router.callback_query(F.data.startswith("lang_"))
 async def process_lang(callback: CallbackQuery, state: FSMContext) -> None:
@@ -247,6 +345,8 @@ async def process_lang(callback: CallbackQuery, state: FSMContext) -> None:
 async def process_confirm_human(callback: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
     lang = data.get("lang", "ru")
+
+    USER_PREFS[callback.from_user.id] = {"lang": lang, "confirmed": True}
 
     await callback.message.edit_text(TEXTS[lang]["enter_link"])
     await state.update_data(msg_id=callback.message.message_id)
@@ -315,11 +415,13 @@ async def process_reason(message: Message, state: FSMContext) -> None:
     )
     await cleanup_tracked(message.bot, message.chat.id, state)
 
+    LAST_REPORT_TIME[user.id] = datetime.utcnow()
+
     try:
         sent_mod = await message.bot.send_message(
             MOD_CHAT_ID,
             report_caption(rid, REPORTS[rid]),
-            reply_markup=kb_moderator_actions(rid)
+            reply_markup=kb_moderator_actions(rid, user.id)
         )
         REPORTS[rid]["mod_msg_id"] = sent_mod.message_id
         logger.info(f"✅ Жалоба #{rid} отправлена модераторам")
@@ -361,7 +463,7 @@ async def cb_view_report(callback: CallbackQuery) -> None:
     if not r:
         await callback.answer("Жалоба не найдена", show_alert=True)
         return
-    await callback.message.edit_text(report_caption(rid, r), reply_markup=kb_report_detail(rid))
+    await callback.message.edit_text(report_caption(rid, r), reply_markup=kb_report_detail(rid, r["user_id"]))
     await callback.answer()
 
 # ============ ДЕЙСТВИЯ МОДЕРАТОРОВ ============
@@ -401,7 +503,9 @@ async def mod_blocked(callback: CallbackQuery) -> None:
         return
 
     lang = r.get("lang", "ru")
-    text = TEXTS[lang]["blocked"].format(link=r["link"])
+    target_type = detect_target_type(r["link"])
+    type_noun = TARGET_TYPE_NOUN[lang][target_type]
+    text = TEXTS[lang]["blocked"].format(link=r["link"], type=type_noun)
 
     try:
         await callback.bot.send_message(r["user_id"], text)
@@ -414,6 +518,46 @@ async def mod_blocked(callback: CallbackQuery) -> None:
         return
 
     await callback.answer("Готово")
+
+@router.callback_query(F.data.startswith("mod_ban_"))
+async def mod_ban(callback: CallbackQuery) -> None:
+    rid = int(callback.data.split("_")[-1])
+    r = REPORTS.get(rid)
+    if not r:
+        await callback.answer("❌ Жалоба не найдена", show_alert=True)
+        return
+
+    BANNED_USERS.add(r["user_id"])
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=kb_report_detail(rid, r["user_id"]))
+    except Exception:
+        try:
+            await callback.message.edit_reply_markup(reply_markup=kb_moderator_actions(rid, r["user_id"]))
+        except Exception:
+            pass
+
+    await callback.answer("🚫 Пользователь забанен")
+
+@router.callback_query(F.data.startswith("mod_unban_"))
+async def mod_unban(callback: CallbackQuery) -> None:
+    rid = int(callback.data.split("_")[-1])
+    r = REPORTS.get(rid)
+    if not r:
+        await callback.answer("❌ Жалоба не найдена", show_alert=True)
+        return
+
+    BANNED_USERS.discard(r["user_id"])
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=kb_report_detail(rid, r["user_id"]))
+    except Exception:
+        try:
+            await callback.message.edit_reply_markup(reply_markup=kb_moderator_actions(rid, r["user_id"]))
+        except Exception:
+            pass
+
+    await callback.answer("✅ Пользователь разбанен")
 
 @router.message(ModForm.waiting_msg, F.text)
 async def process_moderator_msg(message: Message, state: FSMContext) -> None:
@@ -484,22 +628,34 @@ async def health_check(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok", "bot": "running"})
 
 async def keep_alive_loop() -> None:
-    """Пингует сам себя, чтобы бесплатный Render-инстанс не засыпал."""
+    """Пингует сам себя, чтобы бесплатный Render-инстанс не засыпал.
+
+    Пингует чаще и с повторными попытками при неудаче, чтобы минимизировать
+    риск того, что инстанс всё же уснёт из-за пропущенного пинга.
+    """
     hostname = os.getenv("RENDER_EXTERNAL_HOSTNAME")
     if not hostname:
         logger.info("ℹ️ RENDER_EXTERNAL_HOSTNAME не задан — keep-alive пинг отключён")
         return
 
     url = f"https://{hostname}/health"
-    await asyncio.sleep(30)
+    await asyncio.sleep(10)
+
     async with aiohttp.ClientSession() as session:
         while True:
-            try:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                    logger.info(f"🔄 Keep-alive пинг: {resp.status}")
-            except Exception as e:
-                logger.warning(f"⚠️ Keep-alive пинг не удался: {e}")
-            await asyncio.sleep(240)  # каждые 4 минуты
+            success = False
+            for attempt in range(3):
+                try:
+                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                        logger.info(f"🔄 Keep-alive пинг: {resp.status}")
+                        success = True
+                        break
+                except Exception as e:
+                    logger.warning(f"⚠️ Keep-alive пинг не удался (попытка {attempt + 1}/3): {e}")
+                    await asyncio.sleep(5)
+            if not success:
+                logger.error("❌ Keep-alive: все попытки пинга провалились в этом цикле")
+            await asyncio.sleep(150)  # каждые 2.5 минуты — с запасом до 15-минутного лимита простоя Render
 
 async def on_startup(app: web.Application) -> None:
     webhook_url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME', 'localhost')}{WEBHOOK_PATH}"
