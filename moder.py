@@ -522,7 +522,7 @@ def appeal_caption(aid: int, a: dict) -> str:
         f"👤 Пользователь: {a['name']} (@{a['username']})\n"
         f"🆔 ID: {a['user_id']}\n\n"
         f"📝 Текст апелляции:\n{a['text']}"
-    )
+)
     # ============ ХЕНДЛЕРЫ ПОЛЬЗОВАТЕЛЯ ============
 
 async def show_main_menu(message: Message, state: FSMContext, edit: bool = False) -> None:
@@ -584,24 +584,24 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
         logger.info(f"👤 Пользователь {user_id} запустил бота (повтор, lang={lang})")
         return
 
-    # Отправляем с аватаркой
+    # Отправляем с аватаркой при первом запуске
     if BOT_AVATAR and os.path.exists(BOT_AVATAR):
         try:
             photo = FSInputFile(BOT_AVATAR)
             sent = await message.answer_photo(
                 photo=photo,
-                caption="Выберите язык: / Оберіть мову: / Choose language:",
+                caption="Выберите язык / Оберіть мову / Choose language:",
                 reply_markup=kb_language()
             )
         except Exception as e:
             logger.error(f"Ошибка отправки фото: {e}")
             sent = await message.answer(
-                "Выберите язык: / Оберіть мову: / Choose language:",
+                "Выберите язык / Оберіть мову / Choose language:",
                 reply_markup=kb_language()
             )
     else:
         sent = await message.answer(
-            "Выберите язык: / Оберіть мову: / Choose language:",
+            "Выберите язык / Оберіть мову / Choose language:",
             reply_markup=kb_language()
         )
     
@@ -627,7 +627,7 @@ async def process_lang(callback: CallbackQuery, state: FSMContext) -> None:
     except Exception:
         pass
     
-    # Отправляем новое с аватаркой
+    # Отправляем новое с аватаркой и кнопкой "Я не робот"
     if BOT_AVATAR and os.path.exists(BOT_AVATAR):
         try:
             photo = FSInputFile(BOT_AVATAR)
