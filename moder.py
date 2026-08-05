@@ -23,6 +23,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     Message,
     Update,
+    FSInputFile,
 )
 
 # ============ НАСТРОЙКИ ============
@@ -43,6 +44,16 @@ MOD_CHAT_ID = -1004354663980
 COOLDOWN_MINUTES = 30
 COOLDOWN_SECONDS = COOLDOWN_MINUTES * 60
 
+# Путь к аватарке бота (абсолютный путь)
+BOT_AVATAR = os.path.join(os.path.dirname(__file__), "ava.jpg")
+
+# Проверяем существование файла
+if os.path.exists(BOT_AVATAR):
+    print(f"✅ Аватарка найдена: {BOT_AVATAR}")
+else:
+    print(f"⚠️ Аватарка не найдена: {BOT_AVATAR}")
+    BOT_AVATAR = None
+
 # ============ ЛОГИРОВАНИЕ ============
 
 logging.basicConfig(
@@ -60,12 +71,20 @@ USER_PREFS: dict[int, dict] = {}
 
 LAST_REPORT_TIME: dict[int, datetime] = {}
 
-BANNED_USERS: set[int] = set()
+# Структура бана: user_id -> {"reason": str, "permanent": bool, "appeal_sent": bool, "name": str, "lang": str}
+BANNED_USERS: dict[int, dict] = {}
 
 COOLDOWN_ENABLED: bool = True
+BOT_ENABLED: bool = True  # Глобальный выключатель бота
 
 QUESTIONS: dict[int, dict] = {}
 _QUESTION_COUNTER = 0
+
+APPEALS: dict[int, dict] = {}
+_APPEAL_COUNTER = 0
+
+# Список всех пользователей для рассылки
+ALL_USERS: set[int] = set()
 
 def next_report_id() -> int:
     global _REPORT_COUNTER
@@ -76,6 +95,11 @@ def next_question_id() -> int:
     global _QUESTION_COUNTER
     _QUESTION_COUNTER += 1
     return _QUESTION_COUNTER
+
+def next_appeal_id() -> int:
+    global _APPEAL_COUNTER
+    _APPEAL_COUNTER += 1
+    return _APPEAL_COUNTER
 
 def get_cooldown_remaining_minutes(user_id: int) -> int:
     if not COOLDOWN_ENABLED:
@@ -101,8 +125,7 @@ def detect_target_type(link: str) -> str:
             return "bot"
         return "channel_chat"
     return "site"
-
-# ============ ТЕКСТЫ ============
+    # ============ ТЕКСТЫ ============
 
 TEXTS = {
     "ru": {
@@ -120,7 +143,18 @@ TEXTS = {
         "rejected": "Ваша жалоба отклонена",
         "rejected_with_msg": "Ваша жалоба отклонена.\n\nПричина: {msg}",
         "cooldown": "⏳ Действует кулдаун. Подождите {minutes} мин.",
-        "banned": "Вы заблокированы и не можете отправлять жалобы.",
+        "banned": "🚫 Вы заблокированы!\n\nХотите подать апелляцию?",
+        "banned_permanent": "🚫 Ваша апелляция отклонена. Вы больше не можете пользоваться ботом.",
+        "bot_disabled": "🔧 Ведутся технические работы. Пожалуйста, попробуйте позже.",
+        "appeal_btn_yes": "✅ Да, подать апелляцию",
+        "appeal_btn_no": "❌ Нет",
+        "appeal_prompt": "✏️ Напишите текст апелляции:\n(Объясните почему вас стоит разблокировать)",
+        "appeal_sent": "Ваша апелляция отправлена на рассмотрение.",
+        "appeal_notification": "📨 Новая апелляция\n\nПользователь: {name} (@{username})\nID: {user_id}\n\nТекст апелляции:\n{text}",
+        "appeal_approved": "✅ Ваша апелляция одобрена! Вы разблокированы.",
+        "appeal_rejected": "❌ Ваша апелляция отклонена. Вы больше не сможете пользоваться ботом.",
+        "appeal_already_sent": "Вы уже отправили апелляцию. Ожидайте решения модераторов.",
+        "unbanned": "✅ Вы были разблокированы модераторами.",
         "blocked": (
             "Здравствуйте! Вы отправили жалобу на:\n{link}\n\n"
             "После тщательного расследования мы пришли к выводу, что {type} "
@@ -136,6 +170,28 @@ TEXTS = {
         "question_reply_format": "Ответ на вопрос: {answer}",
         "cooldown_disabled": "Кулдаун отключен",
         "cooldown_enabled": "Кулдаун включен",
+        "bot_disabled_msg": "Бот отключен",
+        "bot_enabled_msg": "Бот включен",
+        "banned_list_empty": "📋 Список забаненных пользователей пуст",
+        "banned_list_title": "📋 Список забаненных пользователей:",
+        "banned_list_item": "ID: {user_id}\nИмя: {name}\nПричина: {reason}\nСтатус: {status}",
+        "unban_success": "✅ Пользователь разбанен",
+        "unban_fail": "❌ Пользователь не найден в списке бана",
+        "broadcast_prompt": "✏️ Введите текст для рассылки всем пользователям:",
+        "broadcast_sent": "✅ Рассылка отправлена {count} пользователям",
+        "broadcast_fail": "❌ Ошибка при отправке рассылки",
+        "help_text": (
+            "📋 Список команд модератора:\n\n"
+            "/reports - Список активных жалоб\n"
+            "/banned - Список забаненных пользователей\n"
+            "/off - Отключить бота (технические работы)\n"
+            "/on - Включить бота\n"
+            "/offkd - Отключить кулдаун\n"
+            "/onkd - Включить кулдаун\n"
+            "/kdstatus - Статус кулдауна\n"
+            "/send - Сделать рассылку всем пользователям\n"
+            "/help - Показать это сообщение"
+        ),
     },
     "ua": {
         "choose_lang": "Оберіть мову:",
@@ -152,7 +208,18 @@ TEXTS = {
         "rejected": "Вашу скаргу відхилено",
         "rejected_with_msg": "Вашу скаргу відхилено.\n\nПричина: {msg}",
         "cooldown": "⏳ Діє кулдаун. Зачекайте {minutes} хв.",
-        "banned": "Вас заблоковано, ви не можете надсилати скарги.",
+        "banned": "🚫 Вас заблоковано!\n\nХочете подати апеляцію?",
+        "banned_permanent": "🚫 Вашу апеляцію відхилено. Ви більше не можете користуватися ботом.",
+        "bot_disabled": "🔧 Ведуться технічні роботи. Будь ласка, спробуйте пізніше.",
+        "appeal_btn_yes": "✅ Так, подати апеляцію",
+        "appeal_btn_no": "❌ Ні",
+        "appeal_prompt": "✏️ Напишіть текст апеляції:\n(Поясніть чому вас варто розблокувати)",
+        "appeal_sent": "Вашу апеляцію надіслано на розгляд.",
+        "appeal_notification": "📨 Нова апеляція\n\nКористувач: {name} (@{username})\nID: {user_id}\n\nТекст апеляції:\n{text}",
+        "appeal_approved": "✅ Вашу апеляцію схвалено! Вас розблоковано.",
+        "appeal_rejected": "❌ Вашу апеляцію відхилено. Ви більше не зможете користуватися ботом.",
+        "appeal_already_sent": "Ви вже відправили апеляцію. Очікуйте рішення модераторів.",
+        "unbanned": "✅ Вас розблокували модератори.",
         "blocked": (
             "Вітаємо! Ви надіслали скаргу на:\n{link}\n\n"
             "Після ретельного розслідування ми дійшли висновку, що {type} "
@@ -168,6 +235,28 @@ TEXTS = {
         "question_reply_format": "Відповідь на питання: {answer}",
         "cooldown_disabled": "Кулдаун вимкнено",
         "cooldown_enabled": "Кулдаун увімкнено",
+        "bot_disabled_msg": "Бот вимкнено",
+        "bot_enabled_msg": "Бот увімкнено",
+        "banned_list_empty": "📋 Список заблокованих користувачів порожній",
+        "banned_list_title": "📋 Список заблокованих користувачів:",
+        "banned_list_item": "ID: {user_id}\nІм'я: {name}\nПричина: {reason}\nСтатус: {status}",
+        "unban_success": "✅ Користувача розблоковано",
+        "unban_fail": "❌ Користувача не знайдено в списку бана",
+        "broadcast_prompt": "✏️ Введіть текст для розсилки всім користувачам:",
+        "broadcast_sent": "✅ Розсилку надіслано {count} користувачам",
+        "broadcast_fail": "❌ Помилка при надсиланні розсилки",
+        "help_text": (
+            "📋 Список команд модератора:\n\n"
+            "/reports - Список активних скарг\n"
+            "/banned - Список заблокованих користувачів\n"
+            "/off - Вимкнути бота (технічні роботи)\n"
+            "/on - Увімкнути бота\n"
+            "/offkd - Вимкнути кулдаун\n"
+            "/onkd - Увімкнути кулдаун\n"
+            "/kdstatus - Статус кулдауну\n"
+            "/send - Зробити розсилку всім користувачам\n"
+            "/help - Показати це повідомлення"
+        ),
     },
     "en": {
         "choose_lang": "Choose language:",
@@ -184,7 +273,18 @@ TEXTS = {
         "rejected": "Your report has been rejected",
         "rejected_with_msg": "Your report has been rejected.\n\nReason: {msg}",
         "cooldown": "⏳ Cooldown active. Please wait {minutes} min.",
-        "banned": "You are banned and cannot submit reports.",
+        "banned": "🚫 You are banned!\n\nDo you want to appeal?",
+        "banned_permanent": "🚫 Your appeal has been rejected. You can no longer use the bot.",
+        "bot_disabled": "🔧 Technical work in progress. Please try again later.",
+        "appeal_btn_yes": "✅ Yes, appeal",
+        "appeal_btn_no": "❌ No",
+        "appeal_prompt": "✏️ Write your appeal:\n(Explain why you should be unbanned)",
+        "appeal_sent": "Your appeal has been sent for review.",
+        "appeal_notification": "📨 New appeal\n\nUser: {name} (@{username})\nID: {user_id}\n\nAppeal text:\n{text}",
+        "appeal_approved": "✅ Your appeal has been approved! You are unbanned.",
+        "appeal_rejected": "❌ Your appeal has been rejected. You can no longer use the bot.",
+        "appeal_already_sent": "You have already sent an appeal. Wait for the moderators' decision.",
+        "unbanned": "✅ You have been unbanned by moderators.",
         "blocked": (
             "Hello! You submitted a report on:\n{link}\n\n"
             "After a thorough investigation we concluded that the reported {type} "
@@ -200,6 +300,28 @@ TEXTS = {
         "question_reply_format": "Answer to your question: {answer}",
         "cooldown_disabled": "Cooldown disabled",
         "cooldown_enabled": "Cooldown enabled",
+        "bot_disabled_msg": "Bot disabled",
+        "bot_enabled_msg": "Bot enabled",
+        "banned_list_empty": "📋 Banned users list is empty",
+        "banned_list_title": "📋 Banned users list:",
+        "banned_list_item": "ID: {user_id}\nName: {name}\nReason: {reason}\nStatus: {status}",
+        "unban_success": "✅ User unbanned",
+        "unban_fail": "❌ User not found in ban list",
+        "broadcast_prompt": "✏️ Enter the text to broadcast to all users:",
+        "broadcast_sent": "✅ Broadcast sent to {count} users",
+        "broadcast_fail": "❌ Error sending broadcast",
+        "help_text": (
+            "📋 Moderator commands:\n\n"
+            "/reports - List of active reports\n"
+            "/banned - List of banned users\n"
+            "/off - Disable bot (maintenance)\n"
+            "/on - Enable bot\n"
+            "/offkd - Disable cooldown\n"
+            "/onkd - Enable cooldown\n"
+            "/kdstatus - Cooldown status\n"
+            "/send - Broadcast to all users\n"
+            "/help - Show this message"
+        ),
     },
 }
 
@@ -221,9 +343,12 @@ class QuestionForm(StatesGroup):
 class ModForm(StatesGroup):
     waiting_reject_reason = State()
     waiting_question_reply = State()
+    waiting_broadcast = State()
+
+class AppealForm(StatesGroup):
+    waiting_appeal_text = State()
 
 router = Router()
-
 # ============ КЛАВИАТУРЫ ============
 
 def kb_language() -> InlineKeyboardMarkup:
@@ -256,6 +381,16 @@ def kb_back_to_menu(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=TEXTS[lang]["back_btn"], callback_data="menu_back")]
+        ]
+    )
+
+def kb_appeal(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=TEXTS[lang]["appeal_btn_yes"], callback_data="appeal_yes"),
+                InlineKeyboardButton(text=TEXTS[lang]["appeal_btn_no"], callback_data="appeal_no"),
+            ]
         ]
     )
 
@@ -327,6 +462,32 @@ def kb_cancel_question_reply(lang: str) -> InlineKeyboardMarkup:
         ]
     )
 
+def kb_appeal_actions(appeal_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Одобрить", callback_data=f"appeal_approve_{appeal_id}"),
+                InlineKeyboardButton(text="❌ Отклонить", callback_data=f"appeal_reject_{appeal_id}"),
+            ]
+        ]
+    )
+
+def kb_banned_list() -> InlineKeyboardMarkup:
+    rows = []
+    for user_id, data in BANNED_USERS.items():
+        label = f"{data.get('name', 'Unknown')} (ID: {user_id})"
+        rows.append([InlineKeyboardButton(text=label, callback_data=f"ban_unban_{user_id}")])
+    if not rows:
+        rows = [[InlineKeyboardButton(text="Список пуст", callback_data="noop")]]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+def kb_broadcast_cancel(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=TEXTS[lang]["reject_reason_cancel"], callback_data="broadcast_cancel")]
+        ]
+    )
+
 # ============ ХЕЛПЕРЫ ============
 
 async def cleanup_tracked(bot: Bot, chat_id: int, state: FSMContext) -> None:
@@ -355,12 +516,12 @@ def report_caption(rid: int, r: dict) -> str:
         f"📝 Текст: {r['reason']}"
     )
 
-def question_caption(qid: int, q: dict) -> str:
+def appeal_caption(aid: int, a: dict) -> str:
     return (
-        f"❓ Вопрос #{qid}\n\n"
-        f"👤 От: {q['full_name']} (@{q['username']})\n"
-        f"🆔 ID: {q['user_id']}\n\n"
-        f"📝 Вопрос: {q['text']}"
+        f"📨 Апелляция #{aid}\n\n"
+        f"👤 Пользователь: {a['name']} (@{a['username']})\n"
+        f"🆔 ID: {a['user_id']}\n\n"
+        f"📝 Текст апелляции:\n{a['text']}"
     )
     # ============ ХЕНДЛЕРЫ ПОЛЬЗОВАТЕЛЯ ============
 
@@ -386,6 +547,9 @@ async def show_main_menu(message: Message, state: FSMContext, edit: bool = False
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext) -> None:
     user_id = message.from_user.id
+    
+    # Добавляем пользователя в список всех пользователей
+    ALL_USERS.add(user_id)
 
     await cleanup_tracked(message.bot, message.chat.id, state)
     try:
@@ -394,12 +558,24 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
         pass
     await state.clear()
 
+    # Проверка на отключенный бот
+    if not BOT_ENABLED:
+        lang = "ru"
+        await message.answer(TEXTS[lang]["bot_disabled"])
+        return
+
     prefs = USER_PREFS.get(user_id)
     lang = prefs["lang"] if prefs else "ru"
     await state.update_data(lang=lang)
 
+    # Проверка на вечный бан
+    if user_id in BANNED_USERS and BANNED_USERS[user_id].get("permanent", False):
+        await message.answer(TEXTS[lang]["banned_permanent"])
+        return
+
     if user_id in BANNED_USERS:
-        sent = await message.answer(TEXTS[lang]["banned"])
+        # Пользователь в бане, предлагаем апелляцию
+        sent = await message.answer(TEXTS[lang]["banned"], reply_markup=kb_appeal(lang))
         await track(state, sent.message_id)
         return
 
@@ -408,23 +584,67 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
         logger.info(f"👤 Пользователь {user_id} запустил бота (повтор, lang={lang})")
         return
 
-    sent = await message.answer(
-        "Выберите язык: / Оберіть мову: / Choose language:",
-        reply_markup=kb_language(),
-    )
+    # Отправляем с аватаркой
+    if BOT_AVATAR and os.path.exists(BOT_AVATAR):
+        try:
+            photo = FSInputFile(BOT_AVATAR)
+            sent = await message.answer_photo(
+                photo=photo,
+                caption="Выберите язык: / Оберіть мову: / Choose language:",
+                reply_markup=kb_language()
+            )
+        except Exception as e:
+            logger.error(f"Ошибка отправки фото: {e}")
+            sent = await message.answer(
+                "Выберите язык: / Оберіть мову: / Choose language:",
+                reply_markup=kb_language()
+            )
+    else:
+        sent = await message.answer(
+            "Выберите язык: / Оберіть мову: / Choose language:",
+            reply_markup=kb_language()
+        )
+    
     await track(state, sent.message_id)
     await state.update_data(msg_id=sent.message_id)
     logger.info(f"👤 Пользователь {user_id} запустил бота")
 
 @router.callback_query(F.data.startswith("lang_"))
 async def process_lang(callback: CallbackQuery, state: FSMContext) -> None:
+    if not BOT_ENABLED:
+        await callback.answer("Бот отключен", show_alert=True)
+        return
+    
     lang = callback.data.split("_", 1)[1]
     await state.update_data(lang=lang)
-    await callback.message.edit_text(TEXTS[lang]["confirm_bot"], reply_markup=kb_confirm_human(lang))
+    
+    if BOT_AVATAR and os.path.exists(BOT_AVATAR):
+        try:
+            photo = FSInputFile(BOT_AVATAR)
+            await callback.message.edit_media(
+                media=photo,
+                caption=TEXTS[lang]["confirm_bot"],
+                reply_markup=kb_confirm_human(lang)
+            )
+        except Exception as e:
+            logger.error(f"Ошибка редактирования фото: {e}")
+            await callback.message.edit_text(
+                TEXTS[lang]["confirm_bot"],
+                reply_markup=kb_confirm_human(lang)
+            )
+    else:
+        await callback.message.edit_text(
+            TEXTS[lang]["confirm_bot"],
+            reply_markup=kb_confirm_human(lang)
+        )
     await callback.answer()
 
 @router.callback_query(F.data == "confirm_human")
 async def process_confirm_human(callback: CallbackQuery, state: FSMContext) -> None:
+    if not BOT_ENABLED:
+        await callback.answer("Бот отключен", show_alert=True)
+        return
+    
     data = await state.get_data()
     lang = data.get("lang", "ru")
 
@@ -435,8 +655,127 @@ async def process_confirm_human(callback: CallbackQuery, state: FSMContext) -> N
     await show_main_menu(callback.message, state)
     await callback.answer()
 
+@router.callback_query(F.data == "appeal_yes")
+async def appeal_yes(callback: CallbackQuery, state: FSMContext) -> None:
+    if not BOT_ENABLED:
+        await callback.answer("Бот отключен", show_alert=True)
+        return
+    
+    user_id = callback.from_user.id
+    
+    if user_id not in BANNED_USERS:
+        await callback.answer("Вы не в бане", show_alert=True)
+        return
+    
+    if BANNED_USERS[user_id].get("permanent", False):
+        await callback.answer("Вы в вечном бане, апелляция невозможна", show_alert=True)
+        return
+    
+    if BANNED_USERS[user_id].get("appeal_sent", False):
+        lang = BANNED_USERS[user_id].get("lang", "ru")
+        await callback.answer(TEXTS[lang]["appeal_already_sent"], show_alert=True)
+        return
+    
+    data = await state.get_data()
+    lang = data.get("lang", "ru")
+    
+    await callback.message.delete()
+    sent = await callback.message.answer(
+        TEXTS[lang]["appeal_prompt"],
+        reply_markup=kb_back_to_menu(lang)
+    )
+    await state.update_data(msg_id=sent.message_id)
+    await state.set_state(AppealForm.waiting_appeal_text)
+    await callback.answer()
+
+@router.callback_query(F.data == "appeal_no")
+async def appeal_no(callback: CallbackQuery, state: FSMContext) -> None:
+    if not BOT_ENABLED:
+        await callback.answer("Бот отключен", show_alert=True)
+        return
+    
+    data = await state.get_data()
+    lang = data.get("lang", "ru")
+    
+    await callback.message.delete()
+    await show_main_menu(callback.message, state)
+    await callback.answer()
+
+@router.message(AppealForm.waiting_appeal_text, F.text)
+async def process_appeal(message: Message, state: FSMContext) -> None:
+    if not BOT_ENABLED:
+        await message.answer("Бот отключен")
+        return
+    
+    data = await state.get_data()
+    lang = data.get("lang", "ru")
+    msg_id = data.get("msg_id")
+    appeal_text = message.text.strip()
+    
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    
+    user = message.from_user
+    
+    if user.id not in BANNED_USERS:
+        await message.answer("❌ Вы не в бане")
+        await state.clear()
+        return
+    
+    # Сохраняем апелляцию
+    aid = next_appeal_id()
+    APPEALS[aid] = {
+        "user_id": user.id,
+        "name": user.full_name,
+        "username": user.username or "нет юзернейма",
+        "text": appeal_text,
+        "lang": lang,
+    }
+    
+    BANNED_USERS[user.id]["appeal_sent"] = True
+    BANNED_USERS[user.id]["appeal_id"] = aid
+    
+    await message.bot.edit_message_text(
+        TEXTS[lang]["appeal_sent"],
+        chat_id=message.chat.id,
+        message_id=msg_id,
+        reply_markup=kb_back_to_menu(lang)
+    )
+    
+    # Отправляем уведомление модераторам
+    try:
+        await message.bot.send_message(
+            MOD_CHAT_ID,
+            TEXTS[lang]["appeal_notification"].format(
+                name=user.full_name,
+                username=user.username or "нет юзернейма",
+                user_id=user.id,
+                text=appeal_text
+            ),
+            reply_markup=kb_appeal_actions(aid)
+        )
+        logger.info(f"📨 Апелляция #{aid} отправлена модераторам")
+    except Exception as e:
+        logger.error(f"❌ Ошибка отправки апелляции модераторам: {e}")
+    
+    await state.clear()
+    await state.update_data(lang=lang)
+
+@router.message(AppealForm.waiting_appeal_text)
+async def process_appeal_invalid(message: Message) -> None:
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
 @router.callback_query(F.data == "menu_back")
 async def menu_back(callback: CallbackQuery, state: FSMContext) -> None:
+    if not BOT_ENABLED:
+        await callback.answer("Бот отключен", show_alert=True)
+        return
+    
     data = await state.get_data()
     lang = data.get("lang", "ru")
     
@@ -449,6 +788,10 @@ async def menu_back(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "menu_report")
 async def menu_report(callback: CallbackQuery, state: FSMContext) -> None:
+    if not BOT_ENABLED:
+        await callback.answer("Бот отключен", show_alert=True)
+        return
+    
     user_id = callback.from_user.id
     data = await state.get_data()
     lang = data.get("lang", "ru")
@@ -470,6 +813,10 @@ async def menu_report(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "menu_question")
 async def menu_question(callback: CallbackQuery, state: FSMContext) -> None:
+    if not BOT_ENABLED:
+        await callback.answer("Бот отключен", show_alert=True)
+        return
+    
     data = await state.get_data()
     lang = data.get("lang", "ru")
     
@@ -485,6 +832,10 @@ async def menu_question(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(ReportForm.link, F.text)
 async def process_link(message: Message, state: FSMContext) -> None:
+    if not BOT_ENABLED:
+        await message.answer("Бот отключен")
+        return
+    
     data = await state.get_data()
     lang = data.get("lang", "ru")
     msg_id = data.get("msg_id")
@@ -512,6 +863,10 @@ async def process_link_invalid(message: Message, state: FSMContext) -> None:
 
 @router.message(ReportForm.reason, F.text)
 async def process_reason(message: Message, state: FSMContext) -> None:
+    if not BOT_ENABLED:
+        await message.answer("Бот отключен")
+        return
+    
     data = await state.get_data()
     lang = data.get("lang", "ru")
     msg_id = data.get("msg_id")
@@ -567,6 +922,10 @@ async def process_reason_invalid(message: Message, state: FSMContext) -> None:
 
 @router.message(QuestionForm.question, F.text)
 async def process_question(message: Message, state: FSMContext) -> None:
+    if not BOT_ENABLED:
+        await message.answer("Бот отключен")
+        return
+    
     data = await state.get_data()
     lang = data.get("lang", "ru")
     msg_id = data.get("msg_id")
@@ -620,6 +979,11 @@ async def process_question_invalid(message: Message, state: FSMContext) -> None:
         pass
         # ============ ПАНЕЛЬ МОДЕРАТОРОВ ============
 
+@router.message(Command("help"), F.chat.id == MOD_CHAT_ID)
+async def cmd_help(message: Message) -> None:
+    lang = "ru"
+    await message.answer(TEXTS[lang]["help_text"])
+
 @router.message(Command("reports"), F.chat.id == MOD_CHAT_ID)
 async def cmd_reports(message: Message) -> None:
     try:
@@ -627,6 +991,28 @@ async def cmd_reports(message: Message) -> None:
     except Exception:
         pass
     await message.answer("📋 Список активных жалоб:", reply_markup=kb_reports_list())
+
+@router.message(Command("banned"), F.chat.id == MOD_CHAT_ID)
+async def cmd_banned(message: Message) -> None:
+    if not BANNED_USERS:
+        await message.answer("📋 Список забаненных пользователей пуст")
+        return
+    
+    await message.answer("📋 Список забаненных пользователей:", reply_markup=kb_banned_list())
+
+@router.message(Command("off"), F.chat.id == MOD_CHAT_ID)
+async def cmd_off(message: Message) -> None:
+    global BOT_ENABLED
+    BOT_ENABLED = False
+    await message.answer("✅ Бот отключен (технические работы)")
+    logger.info("Бот отключен модератором")
+
+@router.message(Command("on"), F.chat.id == MOD_CHAT_ID)
+async def cmd_on(message: Message) -> None:
+    global BOT_ENABLED
+    BOT_ENABLED = True
+    await message.answer("✅ Бот включен")
+    logger.info("Бот включен модератором")
 
 @router.message(Command("offkd"), F.chat.id == MOD_CHAT_ID)
 async def cmd_offkd(message: Message) -> None:
@@ -646,6 +1032,56 @@ async def cmd_onkd(message: Message) -> None:
 async def cmd_kdstatus(message: Message) -> None:
     status = "включен" if COOLDOWN_ENABLED else "отключен"
     await message.answer(f"📊 Кулдаун: {status}")
+
+@router.message(Command("send"), F.chat.id == MOD_CHAT_ID)
+async def cmd_send(message: Message, state: FSMContext) -> None:
+    lang = "ru"
+    await state.set_state(ModForm.waiting_broadcast)
+    await message.answer(
+        TEXTS[lang]["broadcast_prompt"],
+        reply_markup=kb_broadcast_cancel(lang)
+    )
+
+@router.callback_query(F.data == "broadcast_cancel")
+async def cb_broadcast_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await callback.message.delete()
+    await callback.answer("Отменено")
+
+@router.message(ModForm.waiting_broadcast, F.text)
+async def process_broadcast(message: Message, state: FSMContext) -> None:
+    text = message.text.strip()
+    
+    if not ALL_USERS:
+        await message.answer("❌ Нет пользователей для рассылки")
+        await state.clear()
+        return
+    
+    success_count = 0
+    fail_count = 0
+    
+    for user_id in ALL_USERS:
+        try:
+            await message.bot.send_message(user_id, text)
+            success_count += 1
+            await asyncio.sleep(0.05)
+        except Exception:
+            fail_count += 1
+    
+    lang = "ru"
+    await message.answer(TEXTS[lang]["broadcast_sent"].format(count=success_count))
+    if fail_count > 0:
+        await message.answer(f"⚠️ Не удалось отправить {fail_count} пользователям")
+    
+    logger.info(f"📨 Рассылка отправлена {success_count} пользователям, ошибок: {fail_count}")
+    await state.clear()
+
+@router.message(ModForm.waiting_broadcast)
+async def process_broadcast_invalid(message: Message) -> None:
+    try:
+        await message.delete()
+    except Exception:
+        pass
 
 @router.callback_query(F.data == "reports_list")
 async def cb_reports_list(callback: CallbackQuery) -> None:
@@ -677,6 +1113,93 @@ async def cb_view_report(callback: CallbackQuery) -> None:
         return
     await callback.message.edit_text(report_caption(rid, r), reply_markup=kb_report_detail(rid, r["user_id"]))
     await callback.answer()
+
+# ============ ДЕЙСТВИЯ МОДЕРАТОРОВ С БАНОМ ============
+
+@router.callback_query(F.data.startswith("ban_unban_"))
+async def ban_unban_user(callback: CallbackQuery) -> None:
+    user_id = int(callback.data.split("_")[-1])
+    
+    if user_id in BANNED_USERS:
+        lang = BANNED_USERS[user_id].get("lang", "ru")
+        
+        del BANNED_USERS[user_id]
+        
+        try:
+            await callback.bot.send_message(user_id, TEXTS[lang]["unbanned"])
+        except Exception:
+            pass
+        
+        await callback.answer("✅ Пользователь разбанен")
+        await callback.message.delete()
+        
+        if BANNED_USERS:
+            await callback.message.answer("📋 Список забаненных пользователей:", reply_markup=kb_banned_list())
+        else:
+            await callback.message.answer("📋 Список забаненных пользователей пуст")
+    else:
+        await callback.answer("❌ Пользователь не в бане", show_alert=True)
+
+@router.callback_query(F.data.startswith("appeal_approve_"))
+async def appeal_approve(callback: CallbackQuery) -> None:
+    aid = int(callback.data.split("_")[-1])
+    appeal = APPEALS.get(aid)
+    
+    if not appeal:
+        await callback.answer("❌ Апелляция не найдена", show_alert=True)
+        return
+    
+    user_id = appeal["user_id"]
+    lang = appeal.get("lang", "ru")
+    
+    if user_id in BANNED_USERS:
+        del BANNED_USERS[user_id]
+    
+    if aid in APPEALS:
+        del APPEALS[aid]
+    
+    try:
+        await callback.bot.send_message(user_id, TEXTS[lang]["appeal_approved"])
+        await callback.message.edit_text(
+            f"✅ Апелляция #{aid} одобрена\nПользователь {appeal['name']} разблокирован"
+        )
+        logger.info(f"✅ Апелляция #{aid} одобрена, пользователь {user_id} разблокирован")
+    except Exception as e:
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+        return
+    
+    await callback.answer("✅ Апелляция одобрена")
+
+@router.callback_query(F.data.startswith("appeal_reject_"))
+async def appeal_reject(callback: CallbackQuery) -> None:
+    aid = int(callback.data.split("_")[-1])
+    appeal = APPEALS.get(aid)
+    
+    if not appeal:
+        await callback.answer("❌ Апелляция не найдена", show_alert=True)
+        return
+    
+    user_id = appeal["user_id"]
+    lang = appeal.get("lang", "ru")
+    
+    if user_id in BANNED_USERS:
+        BANNED_USERS[user_id]["permanent"] = True
+        BANNED_USERS[user_id]["appeal_sent"] = False
+    
+    if aid in APPEALS:
+        del APPEALS[aid]
+    
+    try:
+        await callback.bot.send_message(user_id, TEXTS[lang]["appeal_rejected"])
+        await callback.message.edit_text(
+            f"❌ Апелляция #{aid} отклонена\nПользователь {appeal['name']} отправлен в вечный бан"
+        )
+        logger.info(f"❌ Апелляция #{aid} отклонена, пользователь {user_id} в вечном бане")
+    except Exception as e:
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+        return
+    
+    await callback.answer("❌ Апелляция отклонена")
 
 # ============ ДЕЙСТВИЯ МОДЕРАТОРОВ С ЖАЛОБАМИ ============
 
@@ -803,7 +1326,25 @@ async def mod_ban(callback: CallbackQuery) -> None:
         await callback.answer("❌ Жалоба не найдена", show_alert=True)
         return
 
-    BANNED_USERS.add(r["user_id"])
+    user_id = r["user_id"]
+    lang = r.get("lang", "ru")
+    
+    BANNED_USERS[user_id] = {
+        "reason": "Забанен модератором",
+        "permanent": False,
+        "appeal_sent": False,
+        "name": r["full_name"],
+        "lang": lang,
+    }
+
+    try:
+        await callback.bot.send_message(
+            user_id,
+            TEXTS[lang]["banned"],
+            reply_markup=kb_appeal(lang)
+        )
+    except Exception as e:
+        logger.error(f"Ошибка отправки уведомления о бане: {e}")
 
     try:
         await callback.message.edit_reply_markup(reply_markup=kb_report_detail(rid, r["user_id"]))
@@ -823,7 +1364,15 @@ async def mod_unban(callback: CallbackQuery) -> None:
         await callback.answer("❌ Жалоба не найдена", show_alert=True)
         return
 
-    BANNED_USERS.discard(r["user_id"])
+    user_id = r["user_id"]
+    lang = r.get("lang", "ru")
+    
+    if user_id in BANNED_USERS:
+        del BANNED_USERS[user_id]
+        try:
+            await callback.bot.send_message(user_id, TEXTS[lang]["unbanned"])
+        except Exception:
+            pass
 
     try:
         await callback.message.edit_reply_markup(reply_markup=kb_report_detail(rid, r["user_id"]))
