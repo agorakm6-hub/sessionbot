@@ -21,7 +21,6 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    InputMediaPhoto,
     Message,
     Update,
     FSInputFile,
@@ -139,61 +138,53 @@ def detect_target_type(link: str) -> str:
 # ============ ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ ОТПРАВКИ С ФОТО ============
 
 async def send_with_photo(target, text: str, reply_markup=None, edit_msg_id: int = None, chat_id: int = None) -> Message:
-    """Отправляет сообщение с фото (если фото есть) или просто текстом.
-
-    Если задан chat_id — используется он (даже если target из другого чата,
-    например когда модератор триггерит уведомление пользователю).
-    Никогда не бросает исключение наружу: если редактирование не удалось
-    ни одним из способов, отправляет новое сообщение, чтобы пользователь
-    в любом случае получил ответ.
-    """
-    bot = target.bot
-    target_chat_id = chat_id or target.chat.id
-    has_avatar = bool(BOT_AVATAR and os.path.exists(BOT_AVATAR))
-
-    if edit_msg_id:
+    """Отправляет сообщение с фото (если фото есть) или просто текст"""
+    if BOT_AVATAR and os.path.exists(BOT_AVATAR):
         try:
-            if has_avatar:
-                photo = FSInputFile(BOT_AVATAR)
-                media = InputMediaPhoto(media=photo, caption=text)
-                await bot.edit_message_media(
-                    chat_id=target_chat_id,
+            photo = FSInputFile(BOT_AVATAR)
+            if edit_msg_id and chat_id:
+                # Редактируем существующее сообщение с фото
+                await target.bot.edit_message_media(
+                    chat_id=chat_id,
                     message_id=edit_msg_id,
-                    media=media,
-                    reply_markup=reply_markup,
-                )
-            else:
-                await bot.edit_message_text(
-                    text=text,
-                    chat_id=target_chat_id,
-                    message_id=edit_msg_id,
-                    reply_markup=reply_markup,
-                )
-            return None
-        except Exception as e:
-            logger.warning(f"Не удалось отредактировать сообщение {edit_msg_id}: {e}")
-            # запасной вариант: возможно, это фото-сообщение — редактируем подпись
-            try:
-                await bot.edit_message_caption(
-                    chat_id=target_chat_id,
-                    message_id=edit_msg_id,
+                    media=photo,
                     caption=text,
-                    reply_markup=reply_markup,
+                    reply_markup=reply_markup
                 )
                 return None
-            except Exception as e2:
-                logger.warning(f"Не удалось отредактировать подпись {edit_msg_id}: {e2}")
-            # обе попытки редактирования не удались — отправляем новое сообщение ниже
-
-    try:
-        if has_avatar:
-            photo = FSInputFile(BOT_AVATAR)
-            return await bot.send_photo(target_chat_id, photo=photo, caption=text, reply_markup=reply_markup)
-        return await bot.send_message(target_chat_id, text, reply_markup=reply_markup)
-    except Exception as e:
-        logger.error(f"Не удалось отправить сообщение в чат {target_chat_id}: {e}")
-        return None
-# ============ ТЕКСТЫ ============
+            else:
+                # Отправляем новое сообщение с фото
+                return await target.answer_photo(
+                    photo=photo,
+                    caption=text,
+                    reply_markup=reply_markup
+                )
+        except Exception as e:
+            logger.error(f"Ошибка отправки фото: {e}")
+            # Если фото не отправилось, отправляем просто текст
+            if edit_msg_id and chat_id:
+                await target.bot.edit_message_text(
+                    text=text,
+                    chat_id=chat_id,
+                    message_id=edit_msg_id,
+                    reply_markup=reply_markup
+                )
+                return None
+            else:
+                return await target.answer(text, reply_markup=reply_markup)
+    else:
+        # Если фото нет, отправляем просто текст
+        if edit_msg_id and chat_id:
+            await target.bot.edit_message_text(
+                text=text,
+                chat_id=chat_id,
+                message_id=edit_msg_id,
+                reply_markup=reply_markup
+            )
+            return None
+        else:
+            return await target.answer(text, reply_markup=reply_markup)
+            # ============ ТЕКСТЫ ============
 
 TEXTS = {
     "ru": {
@@ -727,7 +718,6 @@ async def show_main_menu(message: Message, state: FSMContext, edit: bool = False
 async def cmd_start(message: Message, state: FSMContext) -> None:
     user_id = message.from_user.id
     
-    # Добавляем пользователя в список всех пользователей
     ALL_USERS.add(user_id)
 
     await cleanup_tracked(message.bot, message.chat.id, state)
@@ -737,7 +727,6 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
         pass
     await state.clear()
 
-    # Проверка на отключенный бот
     if not BOT_ENABLED:
         lang = "ru"
         await send_with_photo(message, TEXTS[lang]["bot_disabled"])
@@ -747,7 +736,6 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
     lang = prefs["lang"] if prefs else "ru"
     await state.update_data(lang=lang)
 
-    # Проверка на вечный бан
     if user_id in BANNED_USERS and BANNED_USERS[user_id].get("permanent", False):
         await send_with_photo(message, TEXTS[lang]["banned_permanent"])
         return
@@ -914,13 +902,19 @@ async def process_appeal(message: Message, state: FSMContext) -> None:
     BANNED_USERS[user.id]["appeal_sent"] = True
     BANNED_USERS[user.id]["appeal_id"] = aid
     
-    await send_with_photo(
+    # Удаляем старое сообщение и отправляем новое
+    try:
+        await message.bot.delete_message(message.chat.id, msg_id)
+    except Exception:
+        pass
+    
+    sent = await send_with_photo(
         message,
         TEXTS[lang]["appeal_sent"],
-        reply_markup=kb_back_to_menu(lang),
-        edit_msg_id=msg_id,
-        chat_id=message.chat.id
+        reply_markup=kb_back_to_menu(lang)
     )
+    if sent:
+        await state.update_data(msg_id=sent.message_id)
     
     try:
         await message.bot.send_message(
@@ -1032,7 +1026,7 @@ async def menu_question(callback: CallbackQuery, state: FSMContext) -> None:
         await state.update_data(msg_id=sent.message_id)
     await state.set_state(QuestionForm.question)
 
-# ============ ОБРАБОТКА ВВОДА ССЫЛКИ (ИСПРАВЛЕНА) ============
+# ============ ВВОД ССЫЛКИ (УДАЛЯЕМ И ОТПРАВЛЯЕМ НОВОЕ) ============
 
 @router.message(ReportForm.link, F.text)
 async def process_link(message: Message, state: FSMContext) -> None:
@@ -1043,26 +1037,34 @@ async def process_link(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     lang = data.get("lang", "ru")
     msg_id = data.get("msg_id")
+    link = message.text.strip()
 
-    await state.update_data(link=message.text.strip())
+    await state.update_data(link=link)
 
+    # Удаляем сообщение пользователя
     try:
         await message.delete()
     except Exception:
         pass
 
-    # Редактируем сообщение - меняем текст
-    await send_with_photo(
+    # Удаляем старое сообщение бота
+    try:
+        await message.bot.delete_message(message.chat.id, msg_id)
+    except Exception:
+        pass
+
+    # Отправляем новое сообщение с фото
+    sent = await send_with_photo(
         message,
         TEXTS[lang]["enter_reason"],
-        reply_markup=kb_back_to_menu(lang),
-        edit_msg_id=msg_id,
-        chat_id=message.chat.id
+        reply_markup=kb_back_to_menu(lang)
     )
+    if sent:
+        await state.update_data(msg_id=sent.message_id)
     
     await state.set_state(ReportForm.reason)
 
-# ============ ОБРАБОТКА ВВОДА ПРИЧИНЫ (ИСПРАВЛЕНА) ============
+# ============ ВВОД ПРИЧИНЫ (УДАЛЯЕМ И ОТПРАВЛЯЕМ НОВОЕ) ============
 
 @router.message(ReportForm.reason, F.text)
 async def process_reason(message: Message, state: FSMContext) -> None:
@@ -1076,6 +1078,7 @@ async def process_reason(message: Message, state: FSMContext) -> None:
     link = data.get("link")
     reason = message.text.strip()
 
+    # Удаляем сообщение пользователя
     try:
         await message.delete()
     except Exception:
@@ -1094,13 +1097,17 @@ async def process_reason(message: Message, state: FSMContext) -> None:
         "mod_msg_id": None,
     }
 
-    # Редактируем сообщение - меняем текст
+    # Удаляем старое сообщение бота
+    try:
+        await message.bot.delete_message(message.chat.id, msg_id)
+    except Exception:
+        pass
+
+    # Отправляем новое сообщение с фото
     await send_with_photo(
         message,
         TEXTS[lang]["sent"],
-        reply_markup=kb_back_to_menu(lang),
-        edit_msg_id=msg_id,
-        chat_id=message.chat.id
+        reply_markup=kb_back_to_menu(lang)
     )
     
     await state.clear()
@@ -1119,7 +1126,7 @@ async def process_reason(message: Message, state: FSMContext) -> None:
     except Exception as e:
         logger.error(f"❌ Ошибка отправки модераторам: {e}")
 
-# ============ ОБРАБОТКА ВВОДА ВОПРОСА (ИСПРАВЛЕНА) ============
+# ============ ВВОД ВОПРОСА (УДАЛЯЕМ И ОТПРАВЛЯЕМ НОВОЕ) ============
 
 @router.message(QuestionForm.question, F.text)
 async def process_question(message: Message, state: FSMContext) -> None:
@@ -1132,6 +1139,7 @@ async def process_question(message: Message, state: FSMContext) -> None:
     msg_id = data.get("msg_id")
     question_text = message.text.strip()
 
+    # Удаляем сообщение пользователя
     try:
         await message.delete()
     except Exception:
@@ -1148,13 +1156,17 @@ async def process_question(message: Message, state: FSMContext) -> None:
         "answered": False,
     }
 
-    # Редактируем сообщение - меняем текст
+    # Удаляем старое сообщение бота
+    try:
+        await message.bot.delete_message(message.chat.id, msg_id)
+    except Exception:
+        pass
+
+    # Отправляем новое сообщение с фото
     await send_with_photo(
         message,
         TEXTS[lang]["question_sent"],
-        reply_markup=kb_back_to_menu(lang),
-        edit_msg_id=msg_id,
-        chat_id=message.chat.id
+        reply_markup=kb_back_to_menu(lang)
     )
     
     await state.clear()
