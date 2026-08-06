@@ -193,7 +193,7 @@ async def send_with_photo(target, text: str, reply_markup=None, edit_msg_id: int
     except Exception as e:
         logger.error(f"Не удалось отправить сообщение в чат {target_chat_id}: {e}")
         return None
-# ============ ТЕКСТЫ ============
+        # ============ ТЕКСТЫ ============
 
 TEXTS = {
     "ru": {
@@ -727,7 +727,6 @@ async def show_main_menu(message: Message, state: FSMContext, edit: bool = False
 async def cmd_start(message: Message, state: FSMContext) -> None:
     user_id = message.from_user.id
     
-    # Добавляем пользователя в список всех пользователей
     ALL_USERS.add(user_id)
 
     await cleanup_tracked(message.bot, message.chat.id, state)
@@ -737,7 +736,6 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
         pass
     await state.clear()
 
-    # Проверка на отключенный бот
     if not BOT_ENABLED:
         lang = "ru"
         await send_with_photo(message, TEXTS[lang]["bot_disabled"])
@@ -747,7 +745,6 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
     lang = prefs["lang"] if prefs else "ru"
     await state.update_data(lang=lang)
 
-    # Проверка на вечный бан
     if user_id in BANNED_USERS and BANNED_USERS[user_id].get("permanent", False):
         await send_with_photo(message, TEXTS[lang]["banned_permanent"])
         return
@@ -1032,7 +1029,7 @@ async def menu_question(callback: CallbackQuery, state: FSMContext) -> None:
         await state.update_data(msg_id=sent.message_id)
     await state.set_state(QuestionForm.question)
 
-# ============ ОБРАБОТКА ВВОДА ССЫЛКИ (ИСПРАВЛЕНА) ============
+# ============ ОБРАБОТКА ВВОДА ССЫЛКИ ============
 
 @router.message(ReportForm.link, F.text)
 async def process_link(message: Message, state: FSMContext) -> None:
@@ -1051,7 +1048,6 @@ async def process_link(message: Message, state: FSMContext) -> None:
     except Exception:
         pass
 
-    # Редактируем сообщение - меняем текст
     await send_with_photo(
         message,
         TEXTS[lang]["enter_reason"],
@@ -1062,7 +1058,7 @@ async def process_link(message: Message, state: FSMContext) -> None:
     
     await state.set_state(ReportForm.reason)
 
-# ============ ОБРАБОТКА ВВОДА ПРИЧИНЫ (ИСПРАВЛЕНА) ============
+# ============ ОБРАБОТКА ВВОДА ПРИЧИНЫ (С ФОТО ДЛЯ МОДЕРАТОРОВ) ============
 
 @router.message(ReportForm.reason, F.text)
 async def process_reason(message: Message, state: FSMContext) -> None:
@@ -1094,7 +1090,6 @@ async def process_reason(message: Message, state: FSMContext) -> None:
         "mod_msg_id": None,
     }
 
-    # Редактируем сообщение - меняем текст
     await send_with_photo(
         message,
         TEXTS[lang]["sent"],
@@ -1108,18 +1103,28 @@ async def process_reason(message: Message, state: FSMContext) -> None:
 
     LAST_REPORT_TIME[user.id] = datetime.utcnow()
 
+    # ============ ОТПРАВКА МОДЕРАТОРАМ С ФОТО ============
     try:
-        sent_mod = await message.bot.send_message(
-            MOD_CHAT_ID,
-            report_caption(rid, REPORTS[rid]),
-            reply_markup=kb_moderator_actions(rid, user.id)
-        )
+        if BOT_AVATAR and os.path.exists(BOT_AVATAR):
+            photo = FSInputFile(BOT_AVATAR)
+            sent_mod = await message.bot.send_photo(
+                MOD_CHAT_ID,
+                photo=photo,
+                caption=report_caption(rid, REPORTS[rid]),
+                reply_markup=kb_moderator_actions(rid, user.id)
+            )
+        else:
+            sent_mod = await message.bot.send_message(
+                MOD_CHAT_ID,
+                report_caption(rid, REPORTS[rid]),
+                reply_markup=kb_moderator_actions(rid, user.id)
+            )
         REPORTS[rid]["mod_msg_id"] = sent_mod.message_id
-        logger.info(f"✅ Жалоба #{rid} отправлена модераторам")
+        logger.info(f"✅ Жалоба #{rid} отправлена модераторам с фото")
     except Exception as e:
         logger.error(f"❌ Ошибка отправки модераторам: {e}")
 
-# ============ ОБРАБОТКА ВВОДА ВОПРОСА (ИСПРАВЛЕНА) ============
+# ============ ОБРАБОТКА ВВОДА ВОПРОСА ============
 
 @router.message(QuestionForm.question, F.text)
 async def process_question(message: Message, state: FSMContext) -> None:
@@ -1148,7 +1153,6 @@ async def process_question(message: Message, state: FSMContext) -> None:
         "answered": False,
     }
 
-    # Редактируем сообщение - меняем текст
     await send_with_photo(
         message,
         TEXTS[lang]["question_sent"],
@@ -1257,7 +1261,6 @@ async def cmd_msg(message: Message) -> None:
         return
     
     try:
-        # Отправляем с фото пользователю
         await send_with_photo(
             message,
             TEXTS[lang]["msg_from_mod"].format(text=msg_text),
