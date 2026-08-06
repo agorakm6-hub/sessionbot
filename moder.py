@@ -1,30 +1,19 @@
 """
-Telegram-бот для приёма жалоб с модерацией
-Работает на webhook через порт 10000 для Render.com
+config.py — настройки, хранилища данных и базовые вспомогательные функции.
+
+Этот модуль не содержит хендлеров — только то, что нужно остальным файлам.
+Другие файлы делают `import config as cfg` и обращаются к cfg.ИМЯ,
+чтобы изменения глобальных переменных (BOT_ENABLED, COOLDOWN_ENABLED и т.д.)
+были видны во всех модулях одновременно.
 """
 
-import asyncio
 import logging
 import math
 import os
 import sys
 from datetime import datetime
 
-import aiohttp
-from aiohttp import web
-from aiogram import Bot, Dispatcher, F, Router
-from aiogram.filters import CommandStart, Command
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import (
-    CallbackQuery,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    Message,
-    Update,
-    FSInputFile,
-)
+from aiogram.types import FSInputFile, InputMediaPhoto, Message
 
 # ============ НАСТРОЙКИ ============
 
@@ -90,25 +79,30 @@ ALL_USERS: set[int] = set()
 USER_MESSAGES: dict[int, dict] = {}
 _USER_MSG_COUNTER = 0
 
+
 def next_report_id() -> int:
     global _REPORT_COUNTER
     _REPORT_COUNTER += 1
     return _REPORT_COUNTER
+
 
 def next_question_id() -> int:
     global _QUESTION_COUNTER
     _QUESTION_COUNTER += 1
     return _QUESTION_COUNTER
 
+
 def next_appeal_id() -> int:
     global _APPEAL_COUNTER
     _APPEAL_COUNTER += 1
     return _APPEAL_COUNTER
 
+
 def next_user_msg_id() -> int:
     global _USER_MSG_COUNTER
     _USER_MSG_COUNTER += 1
     return _USER_MSG_COUNTER
+
 
 def get_cooldown_remaining_minutes(user_id: int) -> int:
     if not COOLDOWN_ENABLED:
@@ -122,7 +116,9 @@ def get_cooldown_remaining_minutes(user_id: int) -> int:
         return 0
     return math.ceil(remaining / 60)
 
+
 def detect_target_type(link: str) -> str:
+    """Определяет тип нарушителя по ссылке: bot / channel_chat / site."""
     raw = link.strip()
     bare = raw.lstrip("@")
     if bare.lower().endswith("bot") and "/" not in bare and "." not in bare:
@@ -135,56 +131,65 @@ def detect_target_type(link: str) -> str:
         return "channel_chat"
     return "site"
 
+
 # ============ ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ ОТПРАВКИ С ФОТО ============
 
 async def send_with_photo(target, text: str, reply_markup=None, edit_msg_id: int = None, chat_id: int = None) -> Message:
-    """Отправляет сообщение с фото (если фото есть) или просто текст"""
-    if BOT_AVATAR and os.path.exists(BOT_AVATAR):
+    """Отправляет сообщение с фото (если фото есть) или просто текстом.
+
+    Если задан chat_id — используется он (даже если target из другого чата,
+    например когда модератор триггерит уведомление пользователю).
+    Никогда не бросает исключение наружу: если редактирование не удалось
+    ни одним из способов, отправляет новое сообщение, чтобы пользователь
+    в любом случае получил ответ.
+    """
+    bot = target.bot
+    target_chat_id = chat_id or target.chat.id
+    has_avatar = bool(BOT_AVATAR and os.path.exists(BOT_AVATAR))
+
+    if edit_msg_id:
         try:
-            photo = FSInputFile(BOT_AVATAR)
-            if edit_msg_id and chat_id:
-                # Редактируем существующее сообщение с фото
-                await target.bot.edit_message_media(
-                    chat_id=chat_id,
+            if has_avatar:
+                photo = FSInputFile(BOT_AVATAR)
+                media = InputMediaPhoto(media=photo, caption=text)
+                await bot.edit_message_media(
+                    chat_id=target_chat_id,
                     message_id=edit_msg_id,
-                    media=photo,
-                    caption=text,
-                    reply_markup=reply_markup
+                    media=media,
+                    reply_markup=reply_markup,
                 )
-                return None
             else:
-                # Отправляем новое сообщение с фото
-                return await target.answer_photo(
-                    photo=photo,
-                    caption=text,
-                    reply_markup=reply_markup
-                )
-        except Exception as e:
-            logger.error(f"Ошибка отправки фото: {e}")
-            # Если фото не отправилось, отправляем просто текст
-            if edit_msg_id and chat_id:
-                await target.bot.edit_message_text(
+                await bot.edit_message_text(
                     text=text,
-                    chat_id=chat_id,
+                    chat_id=target_chat_id,
                     message_id=edit_msg_id,
-                    reply_markup=reply_markup
+                    reply_markup=reply_markup,
+                )
+            return None
+        except Exception as e:
+            logger.warning(f"Не удалось отредактировать сообщение {edit_msg_id}: {e}")
+            # запасной вариант: возможно, это фото-сообщение — редактируем подпись
+            try:
+                await bot.edit_message_caption(
+                    chat_id=target_chat_id,
+                    message_id=edit_msg_id,
+                    caption=text,
+                    reply_markup=reply_markup,
                 )
                 return None
-            else:
-                return await target.answer(text, reply_markup=reply_markup)
-    else:
-        # Если фото нет, отправляем просто текст
-        if edit_msg_id and chat_id:
-            await target.bot.edit_message_text(
-                text=text,
-                chat_id=chat_id,
-                message_id=edit_msg_id,
-                reply_markup=reply_markup
-            )
-            return None
-        else:
-            return await target.answer(text, reply_markup=reply_markup)
-            # ============ ТЕКСТЫ ============
+            except Exception as e2:
+                logger.warning(f"Не удалось отредактировать подпись {edit_msg_id}: {e2}")
+            # обе попытки редактирования не удались — отправляем новое сообщение ниже
+
+    try:
+        if has_avatar:
+            photo = FSInputFile(BOT_AVATAR)
+            return await bot.send_photo(target_chat_id, photo=photo, caption=text, reply_markup=reply_markup)
+        return await bot.send_message(target_chat_id, text, reply_markup=reply_markup)
+    except Exception as e:
+        logger.error(f"Не удалось отправить сообщение в чат {target_chat_id}: {e}")
+        return None
+# ============ ТЕКСТЫ ============
 
 TEXTS = {
     "ru": {
@@ -408,6 +413,20 @@ TARGET_TYPE_NOUN = {
     "en": {"bot": "bot", "channel_chat": "channel/chat", "site": "website"},
 }
 
+"""
+keyboards.py — состояния FSM, роутер aiogram, все клавиатуры и мелкие
+вспомогательные функции для работы с сообщениями/жалобами.
+
+Все остальные модули с хендлерами делают `from keyboards import router, ...`
+и вешают хендлеры на этот общий router.
+"""
+
+import config as cfg
+from aiogram import Bot, Router
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
+
 # ============ СОСТОЯНИЯ ============
 
 class ReportForm(StatesGroup):
@@ -441,7 +460,7 @@ def kb_confirm_human(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(
-                text=TEXTS[lang]["confirm_bot_btn"], 
+                text=cfg.TEXTS[lang]["confirm_bot_btn"], 
                 callback_data="confirm_human",
                 style="primary"
             )]
@@ -453,12 +472,12 @@ def kb_main_menu(lang: str) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=TEXTS[lang]["report_btn"], 
+                    text=cfg.TEXTS[lang]["report_btn"], 
                     callback_data="menu_report",
                     style="success"  # Зелёная
                 ),
                 InlineKeyboardButton(
-                    text=TEXTS[lang]["question_btn"], 
+                    text=cfg.TEXTS[lang]["question_btn"], 
                     callback_data="menu_question",
                     style="primary"  # Синяя
                 ),
@@ -470,7 +489,7 @@ def kb_back_to_menu(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(
-                text=TEXTS[lang]["back_btn"], 
+                text=cfg.TEXTS[lang]["back_btn"], 
                 callback_data="menu_back",
                 style="primary"
             )]
@@ -482,12 +501,12 @@ def kb_appeal(lang: str) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=TEXTS[lang]["appeal_btn_yes"], 
+                    text=cfg.TEXTS[lang]["appeal_btn_yes"], 
                     callback_data="appeal_yes",
                     style="success"  # Зелёная
                 ),
                 InlineKeyboardButton(
-                    text=TEXTS[lang]["appeal_btn_no"], 
+                    text=cfg.TEXTS[lang]["appeal_btn_no"], 
                     callback_data="appeal_no",
                     style="danger"  # Красная
                 ),
@@ -496,7 +515,7 @@ def kb_appeal(lang: str) -> InlineKeyboardMarkup:
     )
 
 def kb_moderator_actions(report_id: int, user_id: int) -> InlineKeyboardMarkup:
-    banned = user_id in BANNED_USERS
+    banned = user_id in cfg.BANNED_USERS
     ban_btn = (
         InlineKeyboardButton(
             text="✅ Разбанить", 
@@ -530,7 +549,7 @@ def kb_moderator_actions(report_id: int, user_id: int) -> InlineKeyboardMarkup:
 
 def kb_reports_list() -> InlineKeyboardMarkup:
     rows = []
-    for rid, r in sorted(REPORTS.items(), key=lambda x: -x[0]):
+    for rid, r in sorted(cfg.REPORTS.items(), key=lambda x: -x[0]):
         if r["status"] != "pending":
             continue
         label = f"#{rid} — {r['username'] or r['full_name']}"
@@ -540,7 +559,7 @@ def kb_reports_list() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def kb_report_detail(report_id: int, user_id: int) -> InlineKeyboardMarkup:
-    banned = user_id in BANNED_USERS
+    banned = user_id in cfg.BANNED_USERS
     ban_btn = (
         InlineKeyboardButton(
             text="✅ Разбанить", 
@@ -581,7 +600,7 @@ def kb_cancel_reject(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(
-                text=TEXTS[lang]["reject_reason_cancel"], 
+                text=cfg.TEXTS[lang]["reject_reason_cancel"], 
                 callback_data="reject_cancel",
                 style="primary"
             )]
@@ -603,7 +622,7 @@ def kb_cancel_question_reply(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(
-                text=TEXTS[lang]["reject_reason_cancel"], 
+                text=cfg.TEXTS[lang]["reject_reason_cancel"], 
                 callback_data="question_reply_cancel",
                 style="primary"
             )]
@@ -630,7 +649,7 @@ def kb_appeal_actions(appeal_id: int) -> InlineKeyboardMarkup:
 
 def kb_banned_list() -> InlineKeyboardMarkup:
     rows = []
-    for user_id, data in BANNED_USERS.items():
+    for user_id, data in cfg.BANNED_USERS.items():
         label = f"{data.get('name', 'Unknown')} (ID: {user_id})"
         rows.append([InlineKeyboardButton(
             text=label, 
@@ -645,7 +664,7 @@ def kb_broadcast_cancel(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(
-                text=TEXTS[lang]["reject_reason_cancel"], 
+                text=cfg.TEXTS[lang]["reject_reason_cancel"], 
                 callback_data="broadcast_cancel",
                 style="primary"
             )]
@@ -695,9 +714,9 @@ async def show_main_menu(message: Message, state: FSMContext, edit: bool = False
     
     if edit and data.get("menu_msg_id"):
         try:
-            await send_with_photo(
+            await cfg.send_with_photo(
                 message,
-                TEXTS[lang]["main_menu"],
+                cfg.TEXTS[lang]["main_menu"],
                 reply_markup=kb_main_menu(lang),
                 edit_msg_id=data["menu_msg_id"],
                 chat_id=message.chat.id
@@ -706,20 +725,50 @@ async def show_main_menu(message: Message, state: FSMContext, edit: bool = False
         except Exception:
             pass
     
-    sent = await send_with_photo(
+    sent = await cfg.send_with_photo(
         message,
-        TEXTS[lang]["main_menu"],
+        cfg.TEXTS[lang]["main_menu"],
         reply_markup=kb_main_menu(lang)
     )
     if sent:
         await state.update_data(menu_msg_id=sent.message_id)
+
+                 """
+handlers_user.py — хендлеры для обычных пользователей:
+/start, выбор языка, подтверждение "не робот", главное меню,
+подача жалобы (ссылка + причина), вопрос модераторам, апелляция после бана.
+"""
+
+import config as cfg
+from aiogram import F
+from aiogram.filters import CommandStart
+from aiogram.fsm.context import FSMContext
+from aiogram.types import CallbackQuery, Message
+
+from keyboards import (
+    router,
+    ReportForm,
+    QuestionForm,
+    AppealForm,
+    kb_language,
+    kb_confirm_human,
+    kb_appeal,
+    kb_back_to_menu,
+    kb_moderator_actions,
+    kb_moderator_question_actions,
+    kb_appeal_actions,
+    cleanup_tracked,
+    track,
+    report_caption,
+    show_main_menu,
+)
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext) -> None:
     user_id = message.from_user.id
     
     # Добавляем пользователя в список всех пользователей
-    ALL_USERS.add(user_id)
+    cfg.ALL_USERS.add(user_id)
 
     await cleanup_tracked(message.bot, message.chat.id, state)
     try:
@@ -729,24 +778,24 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
     await state.clear()
 
     # Проверка на отключенный бот
-    if not BOT_ENABLED:
+    if not cfg.BOT_ENABLED:
         lang = "ru"
-        await send_with_photo(message, TEXTS[lang]["bot_disabled"])
+        await cfg.send_with_photo(message, cfg.TEXTS[lang]["bot_disabled"])
         return
 
-    prefs = USER_PREFS.get(user_id)
+    prefs = cfg.USER_PREFS.get(user_id)
     lang = prefs["lang"] if prefs else "ru"
     await state.update_data(lang=lang)
 
     # Проверка на вечный бан
-    if user_id in BANNED_USERS and BANNED_USERS[user_id].get("permanent", False):
-        await send_with_photo(message, TEXTS[lang]["banned_permanent"])
+    if user_id in cfg.BANNED_USERS and cfg.BANNED_USERS[user_id].get("permanent", False):
+        await cfg.send_with_photo(message, cfg.TEXTS[lang]["banned_permanent"])
         return
 
-    if user_id in BANNED_USERS:
-        sent = await send_with_photo(
+    if user_id in cfg.BANNED_USERS:
+        sent = await cfg.send_with_photo(
             message,
-            TEXTS[lang]["banned"],
+            cfg.TEXTS[lang]["banned"],
             reply_markup=kb_appeal(lang)
         )
         if sent:
@@ -755,10 +804,10 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 
     if prefs and prefs.get("confirmed"):
         await show_main_menu(message, state)
-        logger.info(f"👤 Пользователь {user_id} запустил бота (повтор, lang={lang})")
+        cfg.logger.info(f"👤 Пользователь {user_id} запустил бота (повтор, lang={lang})")
         return
 
-    sent = await send_with_photo(
+    sent = await cfg.send_with_photo(
         message,
         "Выберите язык / Оберіть мову / Choose language:",
         reply_markup=kb_language()
@@ -767,14 +816,14 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
     if sent:
         await track(state, sent.message_id)
         await state.update_data(msg_id=sent.message_id)
-    logger.info(f"👤 Пользователь {user_id} запустил бота")
+    cfg.logger.info(f"👤 Пользователь {user_id} запустил бота")
 
 @router.callback_query(F.data.startswith("lang_"))
 async def process_lang(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     
-    if not BOT_ENABLED:
-        await send_with_photo(callback.message, TEXTS["ru"]["bot_disabled"])
+    if not cfg.BOT_ENABLED:
+        await cfg.send_with_photo(callback.message, cfg.TEXTS["ru"]["bot_disabled"])
         return
     
     lang = callback.data.split("_", 1)[1]
@@ -785,9 +834,9 @@ async def process_lang(callback: CallbackQuery, state: FSMContext) -> None:
     except Exception:
         pass
     
-    await send_with_photo(
+    await cfg.send_with_photo(
         callback.message,
-        TEXTS[lang]["confirm_bot"],
+        cfg.TEXTS[lang]["confirm_bot"],
         reply_markup=kb_confirm_human(lang)
     )
 
@@ -795,14 +844,14 @@ async def process_lang(callback: CallbackQuery, state: FSMContext) -> None:
 async def process_confirm_human(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     
-    if not BOT_ENABLED:
-        await send_with_photo(callback.message, TEXTS["ru"]["bot_disabled"])
+    if not cfg.BOT_ENABLED:
+        await cfg.send_with_photo(callback.message, cfg.TEXTS["ru"]["bot_disabled"])
         return
     
     data = await state.get_data()
     lang = data.get("lang", "ru")
 
-    USER_PREFS[callback.from_user.id] = {"lang": lang, "confirmed": True}
+    cfg.USER_PREFS[callback.from_user.id] = {"lang": lang, "confirmed": True}
     await state.update_data(lang=lang)
     
     try:
@@ -816,23 +865,23 @@ async def process_confirm_human(callback: CallbackQuery, state: FSMContext) -> N
 async def appeal_yes(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     
-    if not BOT_ENABLED:
-        await send_with_photo(callback.message, TEXTS["ru"]["bot_disabled"])
+    if not cfg.BOT_ENABLED:
+        await cfg.send_with_photo(callback.message, cfg.TEXTS["ru"]["bot_disabled"])
         return
     
     user_id = callback.from_user.id
     
-    if user_id not in BANNED_USERS:
-        await send_with_photo(callback.message, "Вы не в бане")
+    if user_id not in cfg.BANNED_USERS:
+        await cfg.send_with_photo(callback.message, "Вы не в бане")
         return
     
-    if BANNED_USERS[user_id].get("permanent", False):
-        await send_with_photo(callback.message, "Вы в вечном бане, апелляция невозможна")
+    if cfg.BANNED_USERS[user_id].get("permanent", False):
+        await cfg.send_with_photo(callback.message, "Вы в вечном бане, апелляция невозможна")
         return
     
-    if BANNED_USERS[user_id].get("appeal_sent", False):
-        lang = BANNED_USERS[user_id].get("lang", "ru")
-        await send_with_photo(callback.message, TEXTS[lang]["appeal_already_sent"])
+    if cfg.BANNED_USERS[user_id].get("appeal_sent", False):
+        lang = cfg.BANNED_USERS[user_id].get("lang", "ru")
+        await cfg.send_with_photo(callback.message, cfg.TEXTS[lang]["appeal_already_sent"])
         return
     
     data = await state.get_data()
@@ -843,9 +892,9 @@ async def appeal_yes(callback: CallbackQuery, state: FSMContext) -> None:
     except Exception:
         pass
     
-    sent = await send_with_photo(
+    sent = await cfg.send_with_photo(
         callback.message,
-        TEXTS[lang]["appeal_prompt"],
+        cfg.TEXTS[lang]["appeal_prompt"],
         reply_markup=kb_back_to_menu(lang)
     )
     if sent:
@@ -856,8 +905,8 @@ async def appeal_yes(callback: CallbackQuery, state: FSMContext) -> None:
 async def appeal_no(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     
-    if not BOT_ENABLED:
-        await send_with_photo(callback.message, TEXTS["ru"]["bot_disabled"])
+    if not cfg.BOT_ENABLED:
+        await cfg.send_with_photo(callback.message, cfg.TEXTS["ru"]["bot_disabled"])
         return
     
     data = await state.get_data()
@@ -872,8 +921,8 @@ async def appeal_no(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(AppealForm.waiting_appeal_text, F.text)
 async def process_appeal(message: Message, state: FSMContext) -> None:
-    if not BOT_ENABLED:
-        await send_with_photo(message, TEXTS["ru"]["bot_disabled"])
+    if not cfg.BOT_ENABLED:
+        await cfg.send_with_photo(message, cfg.TEXTS["ru"]["bot_disabled"])
         return
     
     data = await state.get_data()
@@ -888,13 +937,13 @@ async def process_appeal(message: Message, state: FSMContext) -> None:
     
     user = message.from_user
     
-    if user.id not in BANNED_USERS:
-        await send_with_photo(message, "❌ Вы не в бане")
+    if user.id not in cfg.BANNED_USERS:
+        await cfg.send_with_photo(message, "❌ Вы не в бане")
         await state.clear()
         return
     
-    aid = next_appeal_id()
-    APPEALS[aid] = {
+    aid = cfg.next_appeal_id()
+    cfg.APPEALS[aid] = {
         "user_id": user.id,
         "name": user.full_name,
         "username": user.username or "нет юзернейма",
@@ -902,12 +951,12 @@ async def process_appeal(message: Message, state: FSMContext) -> None:
         "lang": lang,
     }
     
-    BANNED_USERS[user.id]["appeal_sent"] = True
-    BANNED_USERS[user.id]["appeal_id"] = aid
+    cfg.BANNED_USERS[user.id]["appeal_sent"] = True
+    cfg.BANNED_USERS[user.id]["appeal_id"] = aid
     
-    await send_with_photo(
+    await cfg.send_with_photo(
         message,
-        TEXTS[lang]["appeal_sent"],
+        cfg.TEXTS[lang]["appeal_sent"],
         reply_markup=kb_back_to_menu(lang),
         edit_msg_id=msg_id,
         chat_id=message.chat.id
@@ -915,8 +964,8 @@ async def process_appeal(message: Message, state: FSMContext) -> None:
     
     try:
         await message.bot.send_message(
-            MOD_CHAT_ID,
-            TEXTS[lang]["appeal_notification"].format(
+            cfg.MOD_CHAT_ID,
+            cfg.TEXTS[lang]["appeal_notification"].format(
                 name=user.full_name,
                 username=user.username or "нет юзернейма",
                 user_id=user.id,
@@ -924,9 +973,9 @@ async def process_appeal(message: Message, state: FSMContext) -> None:
             ),
             reply_markup=kb_appeal_actions(aid)
         )
-        logger.info(f"📨 Апелляция #{aid} отправлена модераторам")
+        cfg.logger.info(f"📨 Апелляция #{aid} отправлена модераторам")
     except Exception as e:
-        logger.error(f"❌ Ошибка отправки апелляции модераторам: {e}")
+        cfg.logger.error(f"❌ Ошибка отправки апелляции модераторам: {e}")
     
     await state.clear()
     await state.update_data(lang=lang)
@@ -942,8 +991,8 @@ async def process_appeal_invalid(message: Message) -> None:
 async def menu_back(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     
-    if not BOT_ENABLED:
-        await send_with_photo(callback.message, TEXTS["ru"]["bot_disabled"])
+    if not cfg.BOT_ENABLED:
+        await cfg.send_with_photo(callback.message, cfg.TEXTS["ru"]["bot_disabled"])
         return
     
     data = await state.get_data()
@@ -963,21 +1012,21 @@ async def menu_back(callback: CallbackQuery, state: FSMContext) -> None:
 async def menu_report(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     
-    if not BOT_ENABLED:
-        await send_with_photo(callback.message, TEXTS["ru"]["bot_disabled"])
+    if not cfg.BOT_ENABLED:
+        await cfg.send_with_photo(callback.message, cfg.TEXTS["ru"]["bot_disabled"])
         return
     
     user_id = callback.from_user.id
     data = await state.get_data()
     lang = data.get("lang", "ru")
     
-    if user_id in BANNED_USERS:
-        await send_with_photo(callback.message, TEXTS[lang]["banned"])
+    if user_id in cfg.BANNED_USERS:
+        await cfg.send_with_photo(callback.message, cfg.TEXTS[lang]["banned"])
         return
     
-    remaining = get_cooldown_remaining_minutes(user_id)
+    remaining = cfg.get_cooldown_remaining_minutes(user_id)
     if remaining > 0:
-        await send_with_photo(callback.message, TEXTS[lang]["cooldown"].format(minutes=remaining))
+        await cfg.send_with_photo(callback.message, cfg.TEXTS[lang]["cooldown"].format(minutes=remaining))
         return
     
     try:
@@ -985,9 +1034,9 @@ async def menu_report(callback: CallbackQuery, state: FSMContext) -> None:
     except Exception:
         pass
     
-    sent = await send_with_photo(
+    sent = await cfg.send_with_photo(
         callback.message,
-        TEXTS[lang]["enter_link"],
+        cfg.TEXTS[lang]["enter_link"],
         reply_markup=kb_back_to_menu(lang)
     )
     if sent:
@@ -998,15 +1047,15 @@ async def menu_report(callback: CallbackQuery, state: FSMContext) -> None:
 async def menu_question(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     
-    if not BOT_ENABLED:
-        await send_with_photo(callback.message, TEXTS["ru"]["bot_disabled"])
+    if not cfg.BOT_ENABLED:
+        await cfg.send_with_photo(callback.message, cfg.TEXTS["ru"]["bot_disabled"])
         return
     
     data = await state.get_data()
     lang = data.get("lang", "ru")
     
-    if callback.from_user.id in BANNED_USERS:
-        await send_with_photo(callback.message, TEXTS[lang]["banned"])
+    if callback.from_user.id in cfg.BANNED_USERS:
+        await cfg.send_with_photo(callback.message, cfg.TEXTS[lang]["banned"])
         return
     
     try:
@@ -1014,9 +1063,9 @@ async def menu_question(callback: CallbackQuery, state: FSMContext) -> None:
     except Exception:
         pass
     
-    sent = await send_with_photo(
+    sent = await cfg.send_with_photo(
         callback.message,
-        TEXTS[lang]["question_prompt"],
+        cfg.TEXTS[lang]["question_prompt"],
         reply_markup=kb_back_to_menu(lang)
     )
     if sent:
@@ -1027,8 +1076,8 @@ async def menu_question(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(ReportForm.link, F.text)
 async def process_link(message: Message, state: FSMContext) -> None:
-    if not BOT_ENABLED:
-        await send_with_photo(message, TEXTS["ru"]["bot_disabled"])
+    if not cfg.BOT_ENABLED:
+        await cfg.send_with_photo(message, cfg.TEXTS["ru"]["bot_disabled"])
         return
     
     data = await state.get_data()
@@ -1043,31 +1092,13 @@ async def process_link(message: Message, state: FSMContext) -> None:
         pass
 
     # Редактируем сообщение - меняем текст
-    if BOT_AVATAR and os.path.exists(BOT_AVATAR):
-        try:
-            photo = FSInputFile(BOT_AVATAR)
-            await message.bot.edit_message_media(
-                chat_id=message.chat.id,
-                message_id=msg_id,
-                media=photo,
-                caption=TEXTS[lang]["enter_reason"],
-                reply_markup=kb_back_to_menu(lang)
-            )
-        except Exception as e:
-            logger.error(f"Ошибка редактирования: {e}")
-            await message.bot.edit_message_text(
-                TEXTS[lang]["enter_reason"],
-                chat_id=message.chat.id,
-                message_id=msg_id,
-                reply_markup=kb_back_to_menu(lang)
-            )
-    else:
-        await message.bot.edit_message_text(
-            TEXTS[lang]["enter_reason"],
-            chat_id=message.chat.id,
-            message_id=msg_id,
-            reply_markup=kb_back_to_menu(lang)
-        )
+    await cfg.send_with_photo(
+        message,
+        cfg.TEXTS[lang]["enter_reason"],
+        reply_markup=kb_back_to_menu(lang),
+        edit_msg_id=msg_id,
+        chat_id=message.chat.id
+    )
     
     await state.set_state(ReportForm.reason)
 
@@ -1075,8 +1106,8 @@ async def process_link(message: Message, state: FSMContext) -> None:
 
 @router.message(ReportForm.reason, F.text)
 async def process_reason(message: Message, state: FSMContext) -> None:
-    if not BOT_ENABLED:
-        await send_with_photo(message, TEXTS["ru"]["bot_disabled"])
+    if not cfg.BOT_ENABLED:
+        await cfg.send_with_photo(message, cfg.TEXTS["ru"]["bot_disabled"])
         return
     
     data = await state.get_data()
@@ -1091,8 +1122,8 @@ async def process_reason(message: Message, state: FSMContext) -> None:
         pass
 
     user = message.from_user
-    rid = next_report_id()
-    REPORTS[rid] = {
+    rid = cfg.next_report_id()
+    cfg.REPORTS[rid] = {
         "user_id": user.id,
         "full_name": user.full_name,
         "username": user.username,
@@ -1104,54 +1135,36 @@ async def process_reason(message: Message, state: FSMContext) -> None:
     }
 
     # Редактируем сообщение - меняем текст
-    if BOT_AVATAR and os.path.exists(BOT_AVATAR):
-        try:
-            photo = FSInputFile(BOT_AVATAR)
-            await message.bot.edit_message_media(
-                chat_id=message.chat.id,
-                message_id=msg_id,
-                media=photo,
-                caption=TEXTS[lang]["sent"],
-                reply_markup=kb_back_to_menu(lang)
-            )
-        except Exception as e:
-            logger.error(f"Ошибка редактирования: {e}")
-            await message.bot.edit_message_text(
-                TEXTS[lang]["sent"],
-                chat_id=message.chat.id,
-                message_id=msg_id,
-                reply_markup=kb_back_to_menu(lang)
-            )
-    else:
-        await message.bot.edit_message_text(
-            TEXTS[lang]["sent"],
-            chat_id=message.chat.id,
-            message_id=msg_id,
-            reply_markup=kb_back_to_menu(lang)
-        )
+    await cfg.send_with_photo(
+        message,
+        cfg.TEXTS[lang]["sent"],
+        reply_markup=kb_back_to_menu(lang),
+        edit_msg_id=msg_id,
+        chat_id=message.chat.id
+    )
     
     await state.clear()
     await state.update_data(lang=lang)
 
-    LAST_REPORT_TIME[user.id] = datetime.utcnow()
+    cfg.LAST_REPORT_TIME[user.id] = datetime.utcnow()
 
     try:
         sent_mod = await message.bot.send_message(
-            MOD_CHAT_ID,
-            report_caption(rid, REPORTS[rid]),
+            cfg.MOD_CHAT_ID,
+            report_caption(rid, cfg.REPORTS[rid]),
             reply_markup=kb_moderator_actions(rid, user.id)
         )
-        REPORTS[rid]["mod_msg_id"] = sent_mod.message_id
-        logger.info(f"✅ Жалоба #{rid} отправлена модераторам")
+        cfg.REPORTS[rid]["mod_msg_id"] = sent_mod.message_id
+        cfg.logger.info(f"✅ Жалоба #{rid} отправлена модераторам")
     except Exception as e:
-        logger.error(f"❌ Ошибка отправки модераторам: {e}")
+        cfg.logger.error(f"❌ Ошибка отправки модераторам: {e}")
 
 # ============ ОБРАБОТКА ВВОДА ВОПРОСА (ИСПРАВЛЕНА) ============
 
 @router.message(QuestionForm.question, F.text)
 async def process_question(message: Message, state: FSMContext) -> None:
-    if not BOT_ENABLED:
-        await send_with_photo(message, TEXTS["ru"]["bot_disabled"])
+    if not cfg.BOT_ENABLED:
+        await cfg.send_with_photo(message, cfg.TEXTS["ru"]["bot_disabled"])
         return
     
     data = await state.get_data()
@@ -1165,8 +1178,8 @@ async def process_question(message: Message, state: FSMContext) -> None:
         pass
 
     user = message.from_user
-    qid = next_question_id()
-    QUESTIONS[qid] = {
+    qid = cfg.next_question_id()
+    cfg.QUESTIONS[qid] = {
         "user_id": user.id,
         "full_name": user.full_name,
         "username": user.username or "нет юзернейма",
@@ -1176,39 +1189,21 @@ async def process_question(message: Message, state: FSMContext) -> None:
     }
 
     # Редактируем сообщение - меняем текст
-    if BOT_AVATAR and os.path.exists(BOT_AVATAR):
-        try:
-            photo = FSInputFile(BOT_AVATAR)
-            await message.bot.edit_message_media(
-                chat_id=message.chat.id,
-                message_id=msg_id,
-                media=photo,
-                caption=TEXTS[lang]["question_sent"],
-                reply_markup=kb_back_to_menu(lang)
-            )
-        except Exception as e:
-            logger.error(f"Ошибка редактирования: {e}")
-            await message.bot.edit_message_text(
-                TEXTS[lang]["question_sent"],
-                chat_id=message.chat.id,
-                message_id=msg_id,
-                reply_markup=kb_back_to_menu(lang)
-            )
-    else:
-        await message.bot.edit_message_text(
-            TEXTS[lang]["question_sent"],
-            chat_id=message.chat.id,
-            message_id=msg_id,
-            reply_markup=kb_back_to_menu(lang)
-        )
+    await cfg.send_with_photo(
+        message,
+        cfg.TEXTS[lang]["question_sent"],
+        reply_markup=kb_back_to_menu(lang),
+        edit_msg_id=msg_id,
+        chat_id=message.chat.id
+    )
     
     await state.clear()
     await state.update_data(lang=lang)
 
     try:
         await message.bot.send_message(
-            MOD_CHAT_ID,
-            TEXTS[lang]["question_notification"].format(
+            cfg.MOD_CHAT_ID,
+            cfg.TEXTS[lang]["question_notification"].format(
                 name=user.full_name,
                 username=user.username or "нет юзернейма",
                 user_id=user.id,
@@ -1216,17 +1211,42 @@ async def process_question(message: Message, state: FSMContext) -> None:
             ),
             reply_markup=kb_moderator_question_actions(qid)
         )
-        logger.info(f"❓ Вопрос #{qid} отправлен модераторам")
+        cfg.logger.info(f"❓ Вопрос #{qid} отправлен модераторам")
     except Exception as e:
-        logger.error(f"❌ Ошибка отправки вопроса модераторам: {e}")
+        cfg.logger.error(f"❌ Ошибка отправки вопроса модераторам: {e}")
         # ============ ПАНЕЛЬ МОДЕРАТОРОВ ============
+    """
+handlers_mod.py — панель модераторов: команды (/help, /reports, /banned,
+/on, /off, /onkd, /offkd, /kdstatus, /send, /msg), рассылка, список жалоб,
+принятие/отклонение жалоб, бан/разбан, апелляции, ответы на вопросы.
+"""
 
-@router.message(Command("help"), F.chat.id == MOD_CHAT_ID)
+import config as cfg
+from aiogram import F
+from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.types import CallbackQuery, Message
+
+from keyboards import (
+    router,
+    ModForm,
+    kb_appeal,
+    kb_banned_list,
+    kb_broadcast_cancel,
+    kb_cancel_question_reply,
+    kb_cancel_reject,
+    kb_moderator_actions,
+    kb_report_detail,
+    kb_reports_list,
+    report_caption,
+)
+
+@router.message(Command("help"), F.chat.id == cfg.MOD_CHAT_ID)
 async def cmd_help(message: Message) -> None:
     lang = "ru"
-    await message.answer(TEXTS[lang]["help_text"])
+    await message.answer(cfg.TEXTS[lang]["help_text"])
 
-@router.message(Command("reports"), F.chat.id == MOD_CHAT_ID)
+@router.message(Command("reports"), F.chat.id == cfg.MOD_CHAT_ID)
 async def cmd_reports(message: Message) -> None:
     try:
         await message.delete()
@@ -1234,85 +1254,81 @@ async def cmd_reports(message: Message) -> None:
         pass
     await message.answer("📋 Список активных жалоб:", reply_markup=kb_reports_list())
 
-@router.message(Command("banned"), F.chat.id == MOD_CHAT_ID)
+@router.message(Command("banned"), F.chat.id == cfg.MOD_CHAT_ID)
 async def cmd_banned(message: Message) -> None:
-    if not BANNED_USERS:
+    if not cfg.BANNED_USERS:
         await message.answer("📋 Список забаненных пользователей пуст")
         return
     
     await message.answer("📋 Список забаненных пользователей:", reply_markup=kb_banned_list())
 
-@router.message(Command("off"), F.chat.id == MOD_CHAT_ID)
+@router.message(Command("off"), F.chat.id == cfg.MOD_CHAT_ID)
 async def cmd_off(message: Message) -> None:
-    global BOT_ENABLED
-    BOT_ENABLED = False
+    cfg.BOT_ENABLED = False
     await message.answer("✅ Бот отключен (технические работы)")
-    logger.info("Бот отключен модератором")
+    cfg.logger.info("Бот отключен модератором")
 
-@router.message(Command("on"), F.chat.id == MOD_CHAT_ID)
+@router.message(Command("on"), F.chat.id == cfg.MOD_CHAT_ID)
 async def cmd_on(message: Message) -> None:
-    global BOT_ENABLED
-    BOT_ENABLED = True
+    cfg.BOT_ENABLED = True
     await message.answer("✅ Бот включен")
-    logger.info("Бот включен модератором")
+    cfg.logger.info("Бот включен модератором")
 
-@router.message(Command("offkd"), F.chat.id == MOD_CHAT_ID)
+@router.message(Command("offkd"), F.chat.id == cfg.MOD_CHAT_ID)
 async def cmd_offkd(message: Message) -> None:
-    global COOLDOWN_ENABLED
-    COOLDOWN_ENABLED = False
+    cfg.COOLDOWN_ENABLED = False
     await message.answer("✅ Кулдаун отключен")
-    logger.info("Кулдаун отключен модератором")
+    cfg.logger.info("Кулдаун отключен модератором")
 
-@router.message(Command("onkd"), F.chat.id == MOD_CHAT_ID)
+@router.message(Command("onkd"), F.chat.id == cfg.MOD_CHAT_ID)
 async def cmd_onkd(message: Message) -> None:
-    global COOLDOWN_ENABLED
-    COOLDOWN_ENABLED = True
+    cfg.COOLDOWN_ENABLED = True
     await message.answer("✅ Кулдаун включен")
-    logger.info("Кулдаун включен модератором")
+    cfg.logger.info("Кулдаун включен модератором")
 
-@router.message(Command("kdstatus"), F.chat.id == MOD_CHAT_ID)
+@router.message(Command("kdstatus"), F.chat.id == cfg.MOD_CHAT_ID)
 async def cmd_kdstatus(message: Message) -> None:
-    status = "включен" if COOLDOWN_ENABLED else "отключен"
+    status = "включен" if cfg.COOLDOWN_ENABLED else "отключен"
     await message.answer(f"📊 Кулдаун: {status}")
 
-@router.message(Command("send"), F.chat.id == MOD_CHAT_ID)
+@router.message(Command("send"), F.chat.id == cfg.MOD_CHAT_ID)
 async def cmd_send(message: Message, state: FSMContext) -> None:
     lang = "ru"
     await state.set_state(ModForm.waiting_broadcast)
     await message.answer(
-        TEXTS[lang]["broadcast_prompt"],
+        cfg.TEXTS[lang]["broadcast_prompt"],
         reply_markup=kb_broadcast_cancel(lang)
     )
 
-@router.message(Command("msg"), F.chat.id == MOD_CHAT_ID)
+@router.message(Command("msg"), F.chat.id == cfg.MOD_CHAT_ID)
 async def cmd_msg(message: Message) -> None:
     lang = "ru"
     text = message.text
     
     parts = text.split(maxsplit=2)
     if len(parts) < 3:
-        await message.answer(TEXTS[lang]["msg_invalid"])
+        await message.answer(cfg.TEXTS[lang]["msg_invalid"])
         return
     
     try:
         user_id = int(parts[1])
         msg_text = parts[2]
     except ValueError:
-        await message.answer(TEXTS[lang]["msg_invalid"])
+        await message.answer(cfg.TEXTS[lang]["msg_invalid"])
         return
     
     try:
         # Отправляем с фото пользователю
-        await send_with_photo(
+        await cfg.send_with_photo(
             message,
-            TEXTS[lang]["msg_from_mod"].format(text=msg_text),
+            cfg.TEXTS[lang]["msg_from_mod"].format(text=msg_text),
             chat_id=user_id
         )
-        await message.answer(TEXTS[lang]["msg_sent"].format(user_id=user_id))
-        logger.info(f"📨 Модератор отправил сообщение пользователю {user_id}")
+        await message.answer(cfg.TEXTS[lang]["msg_sent"].format(user_id=user_id))
+        cfg.logger.info(f"📨 Модератор отправил сообщение пользователю {user_id}")
     except Exception as e:
-        await message.answer(TEXTS[lang]["msg_fail"].format(user_id=user_id))
-        logger.error(f"Ошибка отправки сообщения пользователю {user_id}: {e}")
+        await message.answer(cfg.TEXTS[lang]["msg_fail"].format(user_id=user_id))
+        cfg.logger.error(f"Ошибка отправки сообщения пользователю {user_id}: {e}")
 
 @router.callback_query(F.data == "broadcast_cancel")
 async def cb_broadcast_cancel(callback: CallbackQuery, state: FSMContext) -> None:
@@ -1327,7 +1343,7 @@ async def cb_broadcast_cancel(callback: CallbackQuery, state: FSMContext) -> Non
 async def process_broadcast(message: Message, state: FSMContext) -> None:
     text = message.text.strip()
     
-    if not ALL_USERS:
+    if not cfg.ALL_USERS:
         await message.answer("❌ Нет пользователей для рассылки")
         await state.clear()
         return
@@ -1335,9 +1351,9 @@ async def process_broadcast(message: Message, state: FSMContext) -> None:
     success_count = 0
     fail_count = 0
     
-    for user_id in ALL_USERS:
+    for user_id in cfg.ALL_USERS:
         try:
-            await send_with_photo(
+            await cfg.send_with_photo(
                 message,
                 text,
                 chat_id=user_id
@@ -1348,11 +1364,11 @@ async def process_broadcast(message: Message, state: FSMContext) -> None:
             fail_count += 1
     
     lang = "ru"
-    await message.answer(TEXTS[lang]["broadcast_sent"].format(count=success_count))
+    await message.answer(cfg.TEXTS[lang]["broadcast_sent"].format(count=success_count))
     if fail_count > 0:
         await message.answer(f"⚠️ Не удалось отправить {fail_count} пользователям")
     
-    logger.info(f"📨 Рассылка отправлена {success_count} пользователям, ошибок: {fail_count}")
+    cfg.logger.info(f"📨 Рассылка отправлена {success_count} пользователям, ошибок: {fail_count}")
     await state.clear()
 
 @router.message(ModForm.waiting_broadcast)
@@ -1393,7 +1409,7 @@ async def cb_question_reply_cancel(callback: CallbackQuery, state: FSMContext) -
 async def cb_view_report(callback: CallbackQuery) -> None:
     await callback.answer()
     rid = int(callback.data.split("_", 1)[1])
-    r = REPORTS.get(rid)
+    r = cfg.REPORTS.get(rid)
     if not r:
         await callback.message.answer("Жалоба не найдена")
         return
@@ -1406,15 +1422,15 @@ async def ban_unban_user(callback: CallbackQuery) -> None:
     await callback.answer()
     user_id = int(callback.data.split("_")[-1])
     
-    if user_id in BANNED_USERS:
-        lang = BANNED_USERS[user_id].get("lang", "ru")
+    if user_id in cfg.BANNED_USERS:
+        lang = cfg.BANNED_USERS[user_id].get("lang", "ru")
         
-        del BANNED_USERS[user_id]
+        del cfg.BANNED_USERS[user_id]
         
         try:
-            await send_with_photo(
+            await cfg.send_with_photo(
                 callback.message,
-                TEXTS[lang]["unbanned"],
+                cfg.TEXTS[lang]["unbanned"],
                 chat_id=user_id
             )
         except Exception:
@@ -1425,7 +1441,7 @@ async def ban_unban_user(callback: CallbackQuery) -> None:
         except Exception:
             pass
         
-        if BANNED_USERS:
+        if cfg.BANNED_USERS:
             await callback.message.answer("📋 Список забаненных пользователей:", reply_markup=kb_banned_list())
         else:
             await callback.message.answer("📋 Список забаненных пользователей пуст")
@@ -1436,7 +1452,7 @@ async def ban_unban_user(callback: CallbackQuery) -> None:
 async def appeal_approve(callback: CallbackQuery) -> None:
     await callback.answer()
     aid = int(callback.data.split("_")[-1])
-    appeal = APPEALS.get(aid)
+    appeal = cfg.APPEALS.get(aid)
     
     if not appeal:
         await callback.message.answer("❌ Апелляция не найдена")
@@ -1445,22 +1461,22 @@ async def appeal_approve(callback: CallbackQuery) -> None:
     user_id = appeal["user_id"]
     lang = appeal.get("lang", "ru")
     
-    if user_id in BANNED_USERS:
-        del BANNED_USERS[user_id]
+    if user_id in cfg.BANNED_USERS:
+        del cfg.BANNED_USERS[user_id]
     
-    if aid in APPEALS:
-        del APPEALS[aid]
+    if aid in cfg.APPEALS:
+        del cfg.APPEALS[aid]
     
     try:
-        await send_with_photo(
+        await cfg.send_with_photo(
             callback.message,
-            TEXTS[lang]["appeal_approved"],
+            cfg.TEXTS[lang]["appeal_approved"],
             chat_id=user_id
         )
         await callback.message.edit_text(
             f"✅ Апелляция #{aid} одобрена\nПользователь {appeal['name']} разблокирован"
         )
-        logger.info(f"✅ Апелляция #{aid} одобрена, пользователь {user_id} разблокирован")
+        cfg.logger.info(f"✅ Апелляция #{aid} одобрена, пользователь {user_id} разблокирован")
     except Exception as e:
         await callback.message.answer(f"❌ Ошибка: {e}")
 
@@ -1468,7 +1484,7 @@ async def appeal_approve(callback: CallbackQuery) -> None:
 async def appeal_reject(callback: CallbackQuery) -> None:
     await callback.answer()
     aid = int(callback.data.split("_")[-1])
-    appeal = APPEALS.get(aid)
+    appeal = cfg.APPEALS.get(aid)
     
     if not appeal:
         await callback.message.answer("❌ Апелляция не найдена")
@@ -1477,23 +1493,23 @@ async def appeal_reject(callback: CallbackQuery) -> None:
     user_id = appeal["user_id"]
     lang = appeal.get("lang", "ru")
     
-    if user_id in BANNED_USERS:
-        BANNED_USERS[user_id]["permanent"] = True
-        BANNED_USERS[user_id]["appeal_sent"] = False
+    if user_id in cfg.BANNED_USERS:
+        cfg.BANNED_USERS[user_id]["permanent"] = True
+        cfg.BANNED_USERS[user_id]["appeal_sent"] = False
     
-    if aid in APPEALS:
-        del APPEALS[aid]
+    if aid in cfg.APPEALS:
+        del cfg.APPEALS[aid]
     
     try:
-        await send_with_photo(
+        await cfg.send_with_photo(
             callback.message,
-            TEXTS[lang]["appeal_rejected"],
+            cfg.TEXTS[lang]["appeal_rejected"],
             chat_id=user_id
         )
         await callback.message.edit_text(
             f"❌ Апелляция #{aid} отклонена\nПользователь {appeal['name']} отправлен в вечный бан"
         )
-        logger.info(f"❌ Апелляция #{aid} отклонена, пользователь {user_id} в вечном бане")
+        cfg.logger.info(f"❌ Апелляция #{aid} отклонена, пользователь {user_id} в вечном бане")
     except Exception as e:
         await callback.message.answer(f"❌ Ошибка: {e}")
 
@@ -1503,7 +1519,7 @@ async def appeal_reject(callback: CallbackQuery) -> None:
 async def mod_approve(callback: CallbackQuery) -> None:
     await callback.answer()
     rid = int(callback.data.split("_")[-1])
-    r = REPORTS.get(rid)
+    r = cfg.REPORTS.get(rid)
     
     if not r:
         await callback.message.answer("❌ Жалоба не найдена")
@@ -1512,9 +1528,9 @@ async def mod_approve(callback: CallbackQuery) -> None:
     lang = r.get("lang", "ru")
     
     try:
-        await send_with_photo(
+        await cfg.send_with_photo(
             callback.message,
-            TEXTS[lang]["approved"],
+            cfg.TEXTS[lang]["approved"],
             chat_id=r["user_id"]
         )
         r["status"] = "approved"
@@ -1524,7 +1540,7 @@ async def mod_approve(callback: CallbackQuery) -> None:
             reply_markup=None
         )
         
-        logger.info(f"✅ Жалоба #{rid} принята модератором")
+        cfg.logger.info(f"✅ Жалоба #{rid} принята модератором")
     except Exception as e:
         await callback.message.answer(f"❌ Ошибка: {e}")
 
@@ -1532,7 +1548,7 @@ async def mod_approve(callback: CallbackQuery) -> None:
 async def mod_reject(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     rid = int(callback.data.split("_")[-1])
-    r = REPORTS.get(rid)
+    r = cfg.REPORTS.get(rid)
     
     if not r:
         await callback.message.answer("❌ Жалоба не найдена")
@@ -1544,7 +1560,7 @@ async def mod_reject(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(ModForm.waiting_reject_reason)
     
     await callback.message.answer(
-        TEXTS[lang]["reject_reason_prompt"],
+        cfg.TEXTS[lang]["reject_reason_prompt"],
         reply_markup=kb_cancel_reject(lang)
     )
 
@@ -1552,7 +1568,7 @@ async def mod_reject(callback: CallbackQuery, state: FSMContext) -> None:
 async def process_reject_reason(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     rid = data.get("report_id")
-    r = REPORTS.get(rid)
+    r = cfg.REPORTS.get(rid)
     
     if not r:
         await message.answer("❌ Жалоба не найдена")
@@ -1563,21 +1579,21 @@ async def process_reject_reason(message: Message, state: FSMContext) -> None:
     reason = message.text.strip()
     
     try:
-        await send_with_photo(
+        await cfg.send_with_photo(
             message,
-            TEXTS[lang]["rejected_with_msg"].format(msg=reason),
+            cfg.TEXTS[lang]["rejected_with_msg"].format(msg=reason),
             chat_id=r["user_id"]
         )
         r["status"] = "rejected"
         
         await message.bot.edit_text(
-            chat_id=MOD_CHAT_ID,
+            chat_id=cfg.MOD_CHAT_ID,
             message_id=r["mod_msg_id"],
             text=report_caption(rid, r) + f"\n\n❌ Статус: ОТКЛОНЕНА\n\nПричина: {reason}",
             reply_markup=None
         )
         
-        logger.info(f"❌ Жалоба #{rid} отклонена модератором. Причина: {reason}")
+        cfg.logger.info(f"❌ Жалоба #{rid} отклонена модератором. Причина: {reason}")
         await message.answer(f"✅ Жалоба #{rid} отклонена. Причина отправлена пользователю.")
         
     except Exception as e:
@@ -1596,7 +1612,7 @@ async def process_reject_reason_invalid(message: Message) -> None:
 async def mod_ban(callback: CallbackQuery) -> None:
     await callback.answer()
     rid = int(callback.data.split("_")[-1])
-    r = REPORTS.get(rid)
+    r = cfg.REPORTS.get(rid)
     if not r:
         await callback.message.answer("❌ Жалоба не найдена")
         return
@@ -1604,7 +1620,7 @@ async def mod_ban(callback: CallbackQuery) -> None:
     user_id = r["user_id"]
     lang = r.get("lang", "ru")
     
-    BANNED_USERS[user_id] = {
+    cfg.BANNED_USERS[user_id] = {
         "reason": "Забанен модератором",
         "permanent": False,
         "appeal_sent": False,
@@ -1613,14 +1629,14 @@ async def mod_ban(callback: CallbackQuery) -> None:
     }
 
     try:
-        await send_with_photo(
+        await cfg.send_with_photo(
             callback.message,
-            TEXTS[lang]["banned"],
+            cfg.TEXTS[lang]["banned"],
             reply_markup=kb_appeal(lang),
             chat_id=user_id
         )
     except Exception as e:
-        logger.error(f"Ошибка отправки уведомления о бане: {e}")
+        cfg.logger.error(f"Ошибка отправки уведомления о бане: {e}")
 
     try:
         await callback.message.edit_reply_markup(reply_markup=kb_report_detail(rid, r["user_id"]))
@@ -1634,7 +1650,7 @@ async def mod_ban(callback: CallbackQuery) -> None:
 async def mod_unban(callback: CallbackQuery) -> None:
     await callback.answer()
     rid = int(callback.data.split("_")[-1])
-    r = REPORTS.get(rid)
+    r = cfg.REPORTS.get(rid)
     if not r:
         await callback.message.answer("❌ Жалоба не найдена")
         return
@@ -1642,12 +1658,12 @@ async def mod_unban(callback: CallbackQuery) -> None:
     user_id = r["user_id"]
     lang = r.get("lang", "ru")
     
-    if user_id in BANNED_USERS:
-        del BANNED_USERS[user_id]
+    if user_id in cfg.BANNED_USERS:
+        del cfg.BANNED_USERS[user_id]
         try:
-            await send_with_photo(
+            await cfg.send_with_photo(
                 callback.message,
-                TEXTS[lang]["unbanned"],
+                cfg.TEXTS[lang]["unbanned"],
                 chat_id=user_id
             )
         except Exception:
@@ -1667,7 +1683,7 @@ async def mod_unban(callback: CallbackQuery) -> None:
 async def mod_question_reply(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     qid = int(callback.data.split("_")[-1])
-    q = QUESTIONS.get(qid)
+    q = cfg.QUESTIONS.get(qid)
     
     if not q:
         await callback.message.answer("❌ Вопрос не найден")
@@ -1679,7 +1695,7 @@ async def mod_question_reply(callback: CallbackQuery, state: FSMContext) -> None
     await state.set_state(ModForm.waiting_question_reply)
     
     await callback.message.answer(
-        TEXTS[lang]["question_reply_prompt"],
+        cfg.TEXTS[lang]["question_reply_prompt"],
         reply_markup=kb_cancel_question_reply(lang)
     )
 
@@ -1687,7 +1703,7 @@ async def mod_question_reply(callback: CallbackQuery, state: FSMContext) -> None
 async def process_question_reply(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     qid = data.get("question_id")
-    q = QUESTIONS.get(qid)
+    q = cfg.QUESTIONS.get(qid)
     
     if not q:
         await message.answer("❌ Вопрос не найден")
@@ -1698,15 +1714,15 @@ async def process_question_reply(message: Message, state: FSMContext) -> None:
     answer = message.text.strip()
     
     try:
-        await send_with_photo(
+        await cfg.send_with_photo(
             message,
-            TEXTS[lang]["question_reply_format"].format(answer=answer),
+            cfg.TEXTS[lang]["question_reply_format"].format(answer=answer),
             chat_id=q["user_id"]
         )
         q["answered"] = True
         
         await message.answer(f"✅ Ответ отправлен пользователю")
-        logger.info(f"❓ Ответ на вопрос #{qid} отправлен пользователю {q['user_id']}")
+        cfg.logger.info(f"❓ Ответ на вопрос #{qid} отправлен пользователю {q['user_id']}")
         
     except Exception as e:
         await message.answer(f"❌ Ошибка: {e}")
@@ -1720,6 +1736,29 @@ async def process_question_reply_invalid(message: Message) -> None:
     except Exception:
         pass
 
+                             """
+main.py — точка входа: aiohttp-сервер, webhook, health-check,
+анти-сон (keep-alive пинг) и запуск бота.
+
+Запуск: python main.py
+"""
+
+import asyncio
+
+import aiohttp
+from aiohttp import web
+from aiogram import Bot, Dispatcher
+from aiogram.fsm.storage.memory import MemoryStorage
+
+import config as cfg
+from keyboards import router
+
+# Импортируем модули с хендлерами ради побочного эффекта:
+# декораторы @router.message/@router.callback_query регистрируют
+# хендлеры на общий router из keyboards.py.
+import handlers_user  # noqa: F401
+import handlers_mod  # noqa: F401
+
 # ============ WEBHOOK ============
 
 async def webhook_handler(request: web.Request) -> web.Response:
@@ -1729,7 +1768,7 @@ async def webhook_handler(request: web.Request) -> web.Response:
         await dp.feed_update(bot, update)
         return web.Response(status=200)
     except Exception as e:
-        logger.error(f"❌ Webhook error: {e}")
+        cfg.logger.error(f"❌ Webhook error: {e}")
         return web.Response(status=500)
 
 async def health_check(request: web.Request) -> web.Response:
@@ -1738,7 +1777,7 @@ async def health_check(request: web.Request) -> web.Response:
 async def keep_alive_loop() -> None:
     hostname = os.getenv("RENDER_EXTERNAL_HOSTNAME")
     if not hostname:
-        logger.info("ℹ️ RENDER_EXTERNAL_HOSTNAME не задан — keep-alive пинг отключён")
+        cfg.logger.info("ℹ️ RENDER_EXTERNAL_HOSTNAME не задан — keep-alive пинг отключён")
         return
 
     url = f"https://{hostname}/health"
@@ -1750,29 +1789,29 @@ async def keep_alive_loop() -> None:
             for attempt in range(3):
                 try:
                     async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                        logger.info(f"🔄 Keep-alive пинг: {resp.status}")
+                        cfg.logger.info(f"🔄 Keep-alive пинг: {resp.status}")
                         success = True
                         break
                 except Exception as e:
-                    logger.warning(f"⚠️ Keep-alive пинг не удался (попытка {attempt + 1}/3): {e}")
+                    cfg.logger.warning(f"⚠️ Keep-alive пинг не удался (попытка {attempt + 1}/3): {e}")
                     await asyncio.sleep(5)
             if not success:
-                logger.error("❌ Keep-alive: все попытки пинга провалились в этом цикле")
+                cfg.logger.error("❌ Keep-alive: все попытки пинга провалились в этом цикле")
             await asyncio.sleep(150)
 
 async def on_startup(app: web.Application) -> None:
-    webhook_url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME', 'localhost')}{WEBHOOK_PATH}"
+    webhook_url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME', 'localhost')}{cfg.WEBHOOK_PATH}"
 
     if os.getenv('RENDER_EXTERNAL_HOSTNAME'):
-        webhook_url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}{WEBHOOK_PATH}"
+        webhook_url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}{cfg.WEBHOOK_PATH}"
 
     try:
         await bot.set_webhook(url=webhook_url)
-        logger.info(f"✅ Webhook установлен: {webhook_url}")
+        cfg.logger.info(f"✅ Webhook установлен: {webhook_url}")
         me = await bot.get_me()
-        logger.info(f"✅ Бот запущен: @{me.username}")
+        cfg.logger.info(f"✅ Бот запущен: @{me.username}")
     except Exception as e:
-        logger.error(f"❌ Ошибка при старте: {e}")
+        cfg.logger.error(f"❌ Ошибка при старте: {e}")
 
     app["keep_alive_task"] = asyncio.create_task(keep_alive_loop())
 
@@ -1782,21 +1821,21 @@ async def on_shutdown(app: web.Application) -> None:
         task.cancel()
     try:
         await bot.delete_webhook()
-        logger.info("✅ Webhook удалён")
+        cfg.logger.info("✅ Webhook удалён")
     except Exception as e:
-        logger.error(f"❌ Ошибка удаления webhook: {e}")
+        cfg.logger.error(f"❌ Ошибка удаления webhook: {e}")
 
 # ============ ЗАПУСК ============
 
 async def main() -> None:
     global bot, dp
 
-    bot = Bot(token=BOT_TOKEN)
+    bot = Bot(token=cfg.BOT_TOKEN)
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
 
     app = web.Application()
-    app.router.add_post(WEBHOOK_PATH, webhook_handler)
+    app.router.add_post(cfg.WEBHOOK_PATH, webhook_handler)
     app.router.add_get("/health", health_check)
     app.router.add_get("/", health_check)
     app.on_startup.append(on_startup)
@@ -1804,18 +1843,19 @@ async def main() -> None:
 
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, WEB_SERVER_HOST, WEB_SERVER_PORT)
+    site = web.TCPSite(runner, cfg.WEB_SERVER_HOST, cfg.WEB_SERVER_PORT)
     await site.start()
 
-    logger.info(f"🚀 Сервер запущен на порту {WEB_SERVER_PORT}")
+    cfg.logger.info(f"🚀 Сервер запущен на порту {cfg.WEB_SERVER_PORT}")
 
     try:
         await asyncio.Event().wait()
     except KeyboardInterrupt:
-        logger.info("⏹️ Остановка...")
+        cfg.logger.info("⏹️ Остановка...")
     finally:
         await runner.cleanup()
         await bot.session.close()
 
 if __name__ == "__main__":
     asyncio.run(main())
+                
