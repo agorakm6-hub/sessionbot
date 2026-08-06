@@ -86,6 +86,10 @@ _APPEAL_COUNTER = 0
 # Список всех пользователей для рассылки
 ALL_USERS: set[int] = set()
 
+# Хранилище личных сообщений для модераторов
+USER_MESSAGES: dict[int, dict] = {}
+_USER_MSG_COUNTER = 0
+
 def next_report_id() -> int:
     global _REPORT_COUNTER
     _REPORT_COUNTER += 1
@@ -100,6 +104,11 @@ def next_appeal_id() -> int:
     global _APPEAL_COUNTER
     _APPEAL_COUNTER += 1
     return _APPEAL_COUNTER
+
+def next_user_msg_id() -> int:
+    global _USER_MSG_COUNTER
+    _USER_MSG_COUNTER += 1
+    return _USER_MSG_COUNTER
 
 def get_cooldown_remaining_minutes(user_id: int) -> int:
     if not COOLDOWN_ENABLED:
@@ -134,14 +143,14 @@ TEXTS = {
         "confirm_bot_btn": "Я не робот",
         "main_menu": "Главное меню:\nВыберите действие:",
         "report_btn": "📝 Репорт",
-        "question_btn": "❓ Общение",
+        "question_btn": "❓ Вопрос",
         "enter_link": "Введите ссылку на нарушающий материал:",
         "enter_reason": "Опишите суть жалобы:",
         "sent": "Ваша жалоба отправлена на рассмотрение.",
         "back_btn": "⬅️ Вернуться",
-        "approved": "Ваша жалоба принята",
-        "rejected": "Ваша жалоба отклонена",
-        "rejected_with_msg": "Ваша жалоба отклонена.\n\nПричина: {msg}",
+        "approved": "✅ Ваша жалоба принята",
+        "rejected": "❌ Ваша жалоба отклонена",
+        "rejected_with_msg": "❌ Ваша жалоба отклонена.\n\nПричина: {msg}",
         "cooldown": "⏳ Действует кулдаун. Подождите {minutes} мин.",
         "banned": "🚫 Вы заблокированы!\n\nХотите подать апелляцию?",
         "banned_permanent": "🚫 Ваша апелляция отклонена. Вы больше не можете пользоваться ботом.",
@@ -190,8 +199,14 @@ TEXTS = {
             "/onkd - Включить кулдаун\n"
             "/kdstatus - Статус кулдауна\n"
             "/send - Сделать рассылку всем пользователям\n"
+            "/msg - Написать пользователю по ID\n"
             "/help - Показать это сообщение"
         ),
+        "msg_prompt": "✏️ Введите ID пользователя и текст сообщения через пробел:\nПример: 123456789 Привет!",
+        "msg_sent": "✅ Сообщение отправлено пользователю {user_id}",
+        "msg_fail": "❌ Не удалось отправить сообщение пользователю {user_id}",
+        "msg_invalid": "❌ Неверный формат. Используйте: /msg ID Текст",
+        "msg_from_mod": "📨 Сообщение от модератора:\n\n{text}",
     },
     "ua": {
         "choose_lang": "Оберіть мову:",
@@ -199,14 +214,14 @@ TEXTS = {
         "confirm_bot_btn": "Я не робот",
         "main_menu": "Головне меню:\nВиберіть дію:",
         "report_btn": "📝 Репорт",
-        "question_btn": "❓ Спілкування",
+        "question_btn": "❓ Питання",
         "enter_link": "Введіть посилання на матеріал, що порушує правила:",
         "enter_reason": "Опишіть суть скарги:",
         "sent": "Вашу скаргу надіслано на розгляд.",
         "back_btn": "⬅️ Повернутися",
-        "approved": "Вашу скаргу прийнято",
-        "rejected": "Вашу скаргу відхилено",
-        "rejected_with_msg": "Вашу скаргу відхилено.\n\nПричина: {msg}",
+        "approved": "✅ Вашу скаргу прийнято",
+        "rejected": "❌ Вашу скаргу відхилено",
+        "rejected_with_msg": "❌ Вашу скаргу відхилено.\n\nПричина: {msg}",
         "cooldown": "⏳ Діє кулдаун. Зачекайте {minutes} хв.",
         "banned": "🚫 Вас заблоковано!\n\nХочете подати апеляцію?",
         "banned_permanent": "🚫 Вашу апеляцію відхилено. Ви більше не можете користуватися ботом.",
@@ -255,8 +270,14 @@ TEXTS = {
             "/onkd - Увімкнути кулдаун\n"
             "/kdstatus - Статус кулдауну\n"
             "/send - Зробити розсилку всім користувачам\n"
+            "/msg - Написати користувачеві по ID\n"
             "/help - Показати це повідомлення"
         ),
+        "msg_prompt": "✏️ Введіть ID користувача та текст повідомлення через пробіл:\nПриклад: 123456789 Привіт!",
+        "msg_sent": "✅ Повідомлення надіслано користувачеві {user_id}",
+        "msg_fail": "❌ Не вдалося надіслати повідомлення користувачеві {user_id}",
+        "msg_invalid": "❌ Невірний формат. Використовуйте: /msg ID Текст",
+        "msg_from_mod": "📨 Повідомлення від модератора:\n\n{text}",
     },
     "en": {
         "choose_lang": "Choose language:",
@@ -264,14 +285,14 @@ TEXTS = {
         "confirm_bot_btn": "I'm not a robot",
         "main_menu": "Main menu:\nChoose an action:",
         "report_btn": "📝 Report",
-        "question_btn": "❓ Contact",
+        "question_btn": "❓ Question",
         "enter_link": "Enter the link to the violating content:",
         "enter_reason": "Describe the violation:",
         "sent": "Your report has been sent for review.",
         "back_btn": "⬅️ Back",
-        "approved": "Your report has been approved",
-        "rejected": "Your report has been rejected",
-        "rejected_with_msg": "Your report has been rejected.\n\nReason: {msg}",
+        "approved": "✅ Your report has been approved",
+        "rejected": "❌ Your report has been rejected",
+        "rejected_with_msg": "❌ Your report has been rejected.\n\nReason: {msg}",
         "cooldown": "⏳ Cooldown active. Please wait {minutes} min.",
         "banned": "🚫 You are banned!\n\nDo you want to appeal?",
         "banned_permanent": "🚫 Your appeal has been rejected. You can no longer use the bot.",
@@ -320,8 +341,14 @@ TEXTS = {
             "/onkd - Enable cooldown\n"
             "/kdstatus - Cooldown status\n"
             "/send - Broadcast to all users\n"
+            "/msg - Send message to user by ID\n"
             "/help - Show this message"
         ),
+        "msg_prompt": "✏️ Enter user ID and message text separated by space:\nExample: 123456789 Hello!",
+        "msg_sent": "✅ Message sent to user {user_id}",
+        "msg_fail": "❌ Failed to send message to user {user_id}",
+        "msg_invalid": "❌ Invalid format. Use: /msg ID Text",
+        "msg_from_mod": "📨 Message from moderator:\n\n{text}",
     },
 }
 
@@ -397,15 +424,31 @@ def kb_appeal(lang: str) -> InlineKeyboardMarkup:
 def kb_moderator_actions(report_id: int, user_id: int) -> InlineKeyboardMarkup:
     banned = user_id in BANNED_USERS
     ban_btn = (
-        InlineKeyboardButton(text="✅ Разбанить", callback_data=f"mod_unban_{report_id}")
+        InlineKeyboardButton(
+            text="✅ Разбанить", 
+            callback_data=f"mod_unban_{report_id}",
+            style="success"  # Зеленая кнопка
+        )
         if banned
-        else InlineKeyboardButton(text="🚫 Забанить", callback_data=f"mod_ban_{report_id}")
+        else InlineKeyboardButton(
+            text="🚫 Забанить", 
+            callback_data=f"mod_ban_{report_id}",
+            style="danger"  # Красная кнопка
+        )
     )
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="✅ Принять", callback_data=f"mod_approve_{report_id}"),
-                InlineKeyboardButton(text="❌ Отклонить", callback_data=f"mod_reject_{report_id}"),
+                InlineKeyboardButton(
+                    text="✅ Принять", 
+                    callback_data=f"mod_approve_{report_id}",
+                    style="success"  # Зеленая кнопка
+                ),
+                InlineKeyboardButton(
+                    text="❌ Отклонить", 
+                    callback_data=f"mod_reject_{report_id}",
+                    style="danger"  # Красная кнопка
+                ),
             ],
             [ban_btn],
         ]
@@ -425,40 +468,71 @@ def kb_reports_list() -> InlineKeyboardMarkup:
 def kb_report_detail(report_id: int, user_id: int) -> InlineKeyboardMarkup:
     banned = user_id in BANNED_USERS
     ban_btn = (
-        InlineKeyboardButton(text="✅ Разбанить", callback_data=f"mod_unban_{report_id}")
+        InlineKeyboardButton(
+            text="✅ Разбанить", 
+            callback_data=f"mod_unban_{report_id}",
+            style="success"
+        )
         if banned
-        else InlineKeyboardButton(text="🚫 Забанить", callback_data=f"mod_ban_{report_id}")
+        else InlineKeyboardButton(
+            text="🚫 Забанить", 
+            callback_data=f"mod_ban_{report_id}",
+            style="danger"
+        )
     )
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="✅ Принять", callback_data=f"mod_approve_{report_id}"),
-                InlineKeyboardButton(text="❌ Отклонить", callback_data=f"mod_reject_{report_id}"),
+                InlineKeyboardButton(
+                    text="✅ Принять", 
+                    callback_data=f"mod_approve_{report_id}",
+                    style="success"
+                ),
+                InlineKeyboardButton(
+                    text="❌ Отклонить", 
+                    callback_data=f"mod_reject_{report_id}",
+                    style="danger"
+                ),
             ],
-            [InlineKeyboardButton(text="🚫 Канал/бот заблокирован", callback_data=f"mod_blocked_{report_id}")],
             [ban_btn],
-            [InlineKeyboardButton(text="⬅️ К списку", callback_data="reports_list")],
+            [InlineKeyboardButton(
+                text="⬅️ К списку", 
+                callback_data="reports_list",
+                style="primary"
+            )],
         ]
     )
 
 def kb_cancel_reject(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=TEXTS[lang]["reject_reason_cancel"], callback_data="reject_cancel")]
+            [InlineKeyboardButton(
+                text=TEXTS[lang]["reject_reason_cancel"], 
+                callback_data="reject_cancel",
+                style="primary"
+            )]
         ]
     )
 
 def kb_moderator_question_actions(qid: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="✏️ Ответить", callback_data=f"mod_question_reply_{qid}")]
+            [InlineKeyboardButton(
+                text="✏️ Ответить", 
+                callback_data=f"mod_question_reply_{qid}",
+                style="primary"
+            )]
         ]
     )
 
 def kb_cancel_question_reply(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=TEXTS[lang]["reject_reason_cancel"], callback_data="question_reply_cancel")]
+            [InlineKeyboardButton(
+                text=TEXTS[lang]["reject_reason_cancel"], 
+                callback_data="question_reply_cancel",
+                style="primary"
+            )]
         ]
     )
 
@@ -466,8 +540,16 @@ def kb_appeal_actions(appeal_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="✅ Одобрить", callback_data=f"appeal_approve_{appeal_id}"),
-                InlineKeyboardButton(text="❌ Отклонить", callback_data=f"appeal_reject_{appeal_id}"),
+                InlineKeyboardButton(
+                    text="✅ Одобрить", 
+                    callback_data=f"appeal_approve_{appeal_id}",
+                    style="success"
+                ),
+                InlineKeyboardButton(
+                    text="❌ Отклонить", 
+                    callback_data=f"appeal_reject_{appeal_id}",
+                    style="danger"
+                ),
             ]
         ]
     )
@@ -476,7 +558,11 @@ def kb_banned_list() -> InlineKeyboardMarkup:
     rows = []
     for user_id, data in BANNED_USERS.items():
         label = f"{data.get('name', 'Unknown')} (ID: {user_id})"
-        rows.append([InlineKeyboardButton(text=label, callback_data=f"ban_unban_{user_id}")])
+        rows.append([InlineKeyboardButton(
+            text=label, 
+            callback_data=f"ban_unban_{user_id}",
+            style="primary"
+        )])
     if not rows:
         rows = [[InlineKeyboardButton(text="Список пуст", callback_data="noop")]]
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -484,7 +570,11 @@ def kb_banned_list() -> InlineKeyboardMarkup:
 def kb_broadcast_cancel(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=TEXTS[lang]["reject_reason_cancel"], callback_data="broadcast_cancel")]
+            [InlineKeyboardButton(
+                text=TEXTS[lang]["reject_reason_cancel"], 
+                callback_data="broadcast_cancel",
+                style="primary"
+            )]
         ]
     )
 
@@ -522,7 +612,7 @@ def appeal_caption(aid: int, a: dict) -> str:
         f"👤 Пользователь: {a['name']} (@{a['username']})\n"
         f"🆔 ID: {a['user_id']}\n\n"
         f"📝 Текст апелляции:\n{a['text']}"
-)
+    )
     # ============ ХЕНДЛЕРЫ ПОЛЬЗОВАТЕЛЯ ============
 
 async def show_main_menu(message: Message, state: FSMContext, edit: bool = False) -> None:
@@ -611,11 +701,10 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 
 @router.callback_query(F.data.startswith("lang_"))
 async def process_lang(callback: CallbackQuery, state: FSMContext) -> None:
-    # ВАЖНО: сначала отвечаем на callback
     await callback.answer()
     
     if not BOT_ENABLED:
-        await callback.message.answer("Бот отключен")
+        await callback.message.answer(TEXTS["ru"]["bot_disabled"])
         return
     
     lang = callback.data.split("_", 1)[1]
@@ -650,11 +739,10 @@ async def process_lang(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "confirm_human")
 async def process_confirm_human(callback: CallbackQuery, state: FSMContext) -> None:
-    # ВАЖНО: сначала отвечаем на callback
     await callback.answer()
     
     if not BOT_ENABLED:
-        await callback.message.answer("Бот отключен")
+        await callback.message.answer(TEXTS["ru"]["bot_disabled"])
         return
     
     data = await state.get_data()
@@ -663,7 +751,6 @@ async def process_confirm_human(callback: CallbackQuery, state: FSMContext) -> N
     USER_PREFS[callback.from_user.id] = {"lang": lang, "confirmed": True}
     await state.update_data(lang=lang)
     
-    # Удаляем сообщение с подтверждением
     try:
         await callback.message.delete()
     except Exception:
@@ -673,11 +760,10 @@ async def process_confirm_human(callback: CallbackQuery, state: FSMContext) -> N
 
 @router.callback_query(F.data == "appeal_yes")
 async def appeal_yes(callback: CallbackQuery, state: FSMContext) -> None:
-    # ВАЖНО: сначала отвечаем на callback
     await callback.answer()
     
     if not BOT_ENABLED:
-        await callback.message.answer("Бот отключен")
+        await callback.message.answer(TEXTS["ru"]["bot_disabled"])
         return
     
     user_id = callback.from_user.id
@@ -712,27 +798,28 @@ async def appeal_yes(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "appeal_no")
 async def appeal_no(callback: CallbackQuery, state: FSMContext) -> None:
-    # ВАЖНО: сначала отвечаем на callback
     await callback.answer()
     
     if not BOT_ENABLED:
-        await callback.message.answer("Бот отключен")
+        await callback.message.answer(TEXTS["ru"]["bot_disabled"])
         return
     
     data = await state.get_data()
     lang = data.get("lang", "ru")
     
+    # Удаляем сообщение с кнопками
     try:
         await callback.message.delete()
     except Exception:
         pass
     
+    # Показываем главное меню
     await show_main_menu(callback.message, state)
 
 @router.message(AppealForm.waiting_appeal_text, F.text)
 async def process_appeal(message: Message, state: FSMContext) -> None:
     if not BOT_ENABLED:
-        await message.answer("Бот отключен")
+        await message.answer(TEXTS["ru"]["bot_disabled"])
         return
     
     data = await state.get_data()
@@ -800,11 +887,10 @@ async def process_appeal_invalid(message: Message) -> None:
 
 @router.callback_query(F.data == "menu_back")
 async def menu_back(callback: CallbackQuery, state: FSMContext) -> None:
-    # ВАЖНО: сначала отвечаем на callback
     await callback.answer()
     
     if not BOT_ENABLED:
-        await callback.message.answer("Бот отключен")
+        await callback.message.answer(TEXTS["ru"]["bot_disabled"])
         return
     
     data = await state.get_data()
@@ -822,11 +908,10 @@ async def menu_back(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "menu_report")
 async def menu_report(callback: CallbackQuery, state: FSMContext) -> None:
-    # ВАЖНО: сначала отвечаем на callback
     await callback.answer()
     
     if not BOT_ENABLED:
-        await callback.message.answer("Бот отключен")
+        await callback.message.answer(TEXTS["ru"]["bot_disabled"])
         return
     
     user_id = callback.from_user.id
@@ -853,11 +938,10 @@ async def menu_report(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "menu_question")
 async def menu_question(callback: CallbackQuery, state: FSMContext) -> None:
-    # ВАЖНО: сначала отвечаем на callback
     await callback.answer()
     
     if not BOT_ENABLED:
-        await callback.message.answer("Бот отключен")
+        await callback.message.answer(TEXTS["ru"]["bot_disabled"])
         return
     
     data = await state.get_data()
@@ -879,7 +963,7 @@ async def menu_question(callback: CallbackQuery, state: FSMContext) -> None:
 @router.message(ReportForm.link, F.text)
 async def process_link(message: Message, state: FSMContext) -> None:
     if not BOT_ENABLED:
-        await message.answer("Бот отключен")
+        await message.answer(TEXTS["ru"]["bot_disabled"])
         return
     
     data = await state.get_data()
@@ -910,7 +994,7 @@ async def process_link_invalid(message: Message, state: FSMContext) -> None:
 @router.message(ReportForm.reason, F.text)
 async def process_reason(message: Message, state: FSMContext) -> None:
     if not BOT_ENABLED:
-        await message.answer("Бот отключен")
+        await message.answer(TEXTS["ru"]["bot_disabled"])
         return
     
     data = await state.get_data()
@@ -969,7 +1053,7 @@ async def process_reason_invalid(message: Message, state: FSMContext) -> None:
 @router.message(QuestionForm.question, F.text)
 async def process_question(message: Message, state: FSMContext) -> None:
     if not BOT_ENABLED:
-        await message.answer("Бот отключен")
+        await message.answer(TEXTS["ru"]["bot_disabled"])
         return
     
     data = await state.get_data()
@@ -1087,6 +1171,35 @@ async def cmd_send(message: Message, state: FSMContext) -> None:
         TEXTS[lang]["broadcast_prompt"],
         reply_markup=kb_broadcast_cancel(lang)
     )
+
+@router.message(Command("msg"), F.chat.id == MOD_CHAT_ID)
+async def cmd_msg(message: Message) -> None:
+    lang = "ru"
+    text = message.text
+    
+    # Парсим команду: /msg ID Текст
+    parts = text.split(maxsplit=2)
+    if len(parts) < 3:
+        await message.answer(TEXTS[lang]["msg_invalid"])
+        return
+    
+    try:
+        user_id = int(parts[1])
+        msg_text = parts[2]
+    except ValueError:
+        await message.answer(TEXTS[lang]["msg_invalid"])
+        return
+    
+    try:
+        await message.bot.send_message(
+            user_id,
+            TEXTS[lang]["msg_from_mod"].format(text=msg_text)
+        )
+        await message.answer(TEXTS[lang]["msg_sent"].format(user_id=user_id))
+        logger.info(f"📨 Модератор отправил сообщение пользователю {user_id}")
+    except Exception as e:
+        await message.answer(TEXTS[lang]["msg_fail"].format(user_id=user_id))
+        logger.error(f"Ошибка отправки сообщения пользователю {user_id}: {e}")
 
 @router.callback_query(F.data == "broadcast_cancel")
 async def cb_broadcast_cancel(callback: CallbackQuery, state: FSMContext) -> None:
@@ -1344,30 +1457,6 @@ async def process_reject_reason_invalid(message: Message) -> None:
         await message.delete()
     except Exception:
         pass
-
-@router.callback_query(F.data.startswith("mod_blocked_"))
-async def mod_blocked(callback: CallbackQuery) -> None:
-    await callback.answer()
-    rid = int(callback.data.split("_")[-1])
-    r = REPORTS.get(rid)
-    if not r:
-        await callback.message.answer("❌ Жалоба не найдена")
-        return
-
-    lang = r.get("lang", "ru")
-    target_type = detect_target_type(r["link"])
-    type_noun = TARGET_TYPE_NOUN[lang][target_type]
-    text = TEXTS[lang]["blocked"].format(link=r["link"], type=type_noun)
-
-    try:
-        await callback.bot.send_message(r["user_id"], text)
-        r["status"] = "blocked"
-        await callback.message.edit_text(
-            report_caption(rid, r) + "\n\n🚫 Статус: заблокирован, пользователь уведомлён.",
-            reply_markup=None
-        )
-    except Exception as e:
-        await callback.message.answer(f"Ошибка отправки: {e}")
 
 @router.callback_query(F.data.startswith("mod_ban_"))
 async def mod_ban(callback: CallbackQuery) -> None:
