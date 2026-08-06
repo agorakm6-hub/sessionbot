@@ -44,7 +44,7 @@ MOD_CHAT_ID = -1004354663980
 COOLDOWN_MINUTES = 30
 COOLDOWN_SECONDS = COOLDOWN_MINUTES * 60
 
-# Путь к аватарке бота - JPG
+# Путь к аватарке бота - JPG (будет отправляться в каждом сообщении)
 BOT_AVATAR = os.path.join(os.path.dirname(__file__), "ava.jpg")
 
 # Проверяем существование файла
@@ -134,14 +134,64 @@ def detect_target_type(link: str) -> str:
             return "bot"
         return "channel_chat"
     return "site"
-    # ============ ТЕКСТЫ ============
+
+# ============ ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ ОТПРАВКИ С ФОТО ============
+
+async def send_with_photo(target, text: str, reply_markup=None, edit_msg_id: int = None, chat_id: int = None) -> Message:
+    """Отправляет сообщение с фото (если фото есть) или просто текст"""
+    if BOT_AVATAR and os.path.exists(BOT_AVATAR):
+        try:
+            photo = FSInputFile(BOT_AVATAR)
+            if edit_msg_id and chat_id:
+                # Редактируем существующее сообщение с фото
+                await target.bot.edit_message_media(
+                    chat_id=chat_id,
+                    message_id=edit_msg_id,
+                    media=photo,
+                    caption=text,
+                    reply_markup=reply_markup
+                )
+                return None
+            else:
+                # Отправляем новое сообщение с фото
+                return await target.answer_photo(
+                    photo=photo,
+                    caption=text,
+                    reply_markup=reply_markup
+                )
+        except Exception as e:
+            logger.error(f"Ошибка отправки фото: {e}")
+            # Если фото не отправилось, отправляем просто текст
+            if edit_msg_id and chat_id:
+                await target.bot.edit_message_text(
+                    text=text,
+                    chat_id=chat_id,
+                    message_id=edit_msg_id,
+                    reply_markup=reply_markup
+                )
+                return None
+            else:
+                return await target.answer(text, reply_markup=reply_markup)
+    else:
+        # Если фото нет, отправляем просто текст
+        if edit_msg_id and chat_id:
+            await target.bot.edit_message_text(
+                text=text,
+                chat_id=chat_id,
+                message_id=edit_msg_id,
+                reply_markup=reply_markup
+            )
+            return None
+        else:
+            return await target.answer(text, reply_markup=reply_markup)
+            # ============ ТЕКСТЫ ============
 
 TEXTS = {
     "ru": {
         "choose_lang": "Выберите язык:",
         "confirm_bot": "Подтвердите, что вы не робот:",
         "confirm_bot_btn": "Я не робот",
-        "main_menu": "Главное меню:\nВыберите действие:",
+        "main_menu": "Выберите действие:",
         "report_btn": "📝 Репорт",
         "question_btn": "❓ Вопрос",
         "enter_link": "Введите ссылку на нарушающий материал:",
@@ -212,7 +262,7 @@ TEXTS = {
         "choose_lang": "Оберіть мову:",
         "confirm_bot": "Підтвердіть, що ви не робот:",
         "confirm_bot_btn": "Я не робот",
-        "main_menu": "Головне меню:\nВиберіть дію:",
+        "main_menu": "Виберіть дію:",
         "report_btn": "📝 Репорт",
         "question_btn": "❓ Питання",
         "enter_link": "Введіть посилання на матеріал, що порушує правила:",
@@ -283,7 +333,7 @@ TEXTS = {
         "choose_lang": "Choose language:",
         "confirm_bot": "Please confirm you're not a robot:",
         "confirm_bot_btn": "I'm not a robot",
-        "main_menu": "Main menu:\nChoose an action:",
+        "main_menu": "Choose an action:",
         "report_btn": "📝 Report",
         "question_btn": "❓ Question",
         "enter_link": "Enter the link to the violating content:",
@@ -390,7 +440,11 @@ def kb_language() -> InlineKeyboardMarkup:
 def kb_confirm_human(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=TEXTS[lang]["confirm_bot_btn"], callback_data="confirm_human")]
+            [InlineKeyboardButton(
+                text=TEXTS[lang]["confirm_bot_btn"], 
+                callback_data="confirm_human",
+                style="primary"
+            )]
         ]
     )
 
@@ -398,8 +452,16 @@ def kb_main_menu(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text=TEXTS[lang]["report_btn"], callback_data="menu_report"),
-                InlineKeyboardButton(text=TEXTS[lang]["question_btn"], callback_data="menu_question"),
+                InlineKeyboardButton(
+                    text=TEXTS[lang]["report_btn"], 
+                    callback_data="menu_report",
+                    style="success"  # Зелёная
+                ),
+                InlineKeyboardButton(
+                    text=TEXTS[lang]["question_btn"], 
+                    callback_data="menu_question",
+                    style="primary"  # Синяя
+                ),
             ]
         ]
     )
@@ -407,7 +469,11 @@ def kb_main_menu(lang: str) -> InlineKeyboardMarkup:
 def kb_back_to_menu(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=TEXTS[lang]["back_btn"], callback_data="menu_back")]
+            [InlineKeyboardButton(
+                text=TEXTS[lang]["back_btn"], 
+                callback_data="menu_back",
+                style="primary"
+            )]
         ]
     )
 
@@ -415,8 +481,16 @@ def kb_appeal(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text=TEXTS[lang]["appeal_btn_yes"], callback_data="appeal_yes"),
-                InlineKeyboardButton(text=TEXTS[lang]["appeal_btn_no"], callback_data="appeal_no"),
+                InlineKeyboardButton(
+                    text=TEXTS[lang]["appeal_btn_yes"], 
+                    callback_data="appeal_yes",
+                    style="success"  # Зелёная
+                ),
+                InlineKeyboardButton(
+                    text=TEXTS[lang]["appeal_btn_no"], 
+                    callback_data="appeal_no",
+                    style="danger"  # Красная
+                ),
             ]
         ]
     )
@@ -427,13 +501,13 @@ def kb_moderator_actions(report_id: int, user_id: int) -> InlineKeyboardMarkup:
         InlineKeyboardButton(
             text="✅ Разбанить", 
             callback_data=f"mod_unban_{report_id}",
-            style="success"  # Зеленая кнопка
+            style="success"  # Зелёная
         )
         if banned
         else InlineKeyboardButton(
             text="🚫 Забанить", 
             callback_data=f"mod_ban_{report_id}",
-            style="danger"  # Красная кнопка
+            style="danger"  # Красная
         )
     )
     return InlineKeyboardMarkup(
@@ -442,12 +516,12 @@ def kb_moderator_actions(report_id: int, user_id: int) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text="✅ Принять", 
                     callback_data=f"mod_approve_{report_id}",
-                    style="success"  # Зеленая кнопка
+                    style="success"  # Зелёная
                 ),
                 InlineKeyboardButton(
                     text="❌ Отклонить", 
                     callback_data=f"mod_reject_{report_id}",
-                    style="danger"  # Красная кнопка
+                    style="danger"  # Красная
                 ),
             ],
             [ban_btn],
@@ -621,18 +695,24 @@ async def show_main_menu(message: Message, state: FSMContext, edit: bool = False
     
     if edit and data.get("menu_msg_id"):
         try:
-            await message.bot.edit_message_text(
+            await send_with_photo(
+                message,
                 TEXTS[lang]["main_menu"],
-                chat_id=message.chat.id,
-                message_id=data["menu_msg_id"],
-                reply_markup=kb_main_menu(lang)
+                reply_markup=kb_main_menu(lang),
+                edit_msg_id=data["menu_msg_id"],
+                chat_id=message.chat.id
             )
             return
         except Exception:
             pass
     
-    sent = await message.answer(TEXTS[lang]["main_menu"], reply_markup=kb_main_menu(lang))
-    await state.update_data(menu_msg_id=sent.message_id)
+    sent = await send_with_photo(
+        message,
+        TEXTS[lang]["main_menu"],
+        reply_markup=kb_main_menu(lang)
+    )
+    if sent:
+        await state.update_data(menu_msg_id=sent.message_id)
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext) -> None:
@@ -651,7 +731,7 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
     # Проверка на отключенный бот
     if not BOT_ENABLED:
         lang = "ru"
-        await message.answer(TEXTS[lang]["bot_disabled"])
+        await send_with_photo(message, TEXTS[lang]["bot_disabled"])
         return
 
     prefs = USER_PREFS.get(user_id)
@@ -660,13 +740,17 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 
     # Проверка на вечный бан
     if user_id in BANNED_USERS and BANNED_USERS[user_id].get("permanent", False):
-        await message.answer(TEXTS[lang]["banned_permanent"])
+        await send_with_photo(message, TEXTS[lang]["banned_permanent"])
         return
 
     if user_id in BANNED_USERS:
-        # Пользователь в бане, предлагаем апелляцию
-        sent = await message.answer(TEXTS[lang]["banned"], reply_markup=kb_appeal(lang))
-        await track(state, sent.message_id)
+        sent = await send_with_photo(
+            message,
+            TEXTS[lang]["banned"],
+            reply_markup=kb_appeal(lang)
+        )
+        if sent:
+            await track(state, sent.message_id)
         return
 
     if prefs and prefs.get("confirmed"):
@@ -674,29 +758,15 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
         logger.info(f"👤 Пользователь {user_id} запустил бота (повтор, lang={lang})")
         return
 
-    # Отправляем с аватаркой при первом запуске
-    if BOT_AVATAR and os.path.exists(BOT_AVATAR):
-        try:
-            photo = FSInputFile(BOT_AVATAR)
-            sent = await message.answer_photo(
-                photo=photo,
-                caption="Выберите язык / Оберіть мову / Choose language:",
-                reply_markup=kb_language()
-            )
-        except Exception as e:
-            logger.error(f"Ошибка отправки фото: {e}")
-            sent = await message.answer(
-                "Выберите язык / Оберіть мову / Choose language:",
-                reply_markup=kb_language()
-            )
-    else:
-        sent = await message.answer(
-            "Выберите язык / Оберіть мову / Choose language:",
-            reply_markup=kb_language()
-        )
+    sent = await send_with_photo(
+        message,
+        "Выберите язык / Оберіть мову / Choose language:",
+        reply_markup=kb_language()
+    )
     
-    await track(state, sent.message_id)
-    await state.update_data(msg_id=sent.message_id)
+    if sent:
+        await track(state, sent.message_id)
+        await state.update_data(msg_id=sent.message_id)
     logger.info(f"👤 Пользователь {user_id} запустил бота")
 
 @router.callback_query(F.data.startswith("lang_"))
@@ -704,45 +774,29 @@ async def process_lang(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     
     if not BOT_ENABLED:
-        await callback.message.answer(TEXTS["ru"]["bot_disabled"])
+        await send_with_photo(callback.message, TEXTS["ru"]["bot_disabled"])
         return
     
     lang = callback.data.split("_", 1)[1]
     await state.update_data(lang=lang)
     
-    # Удаляем старое сообщение
     try:
         await callback.message.delete()
     except Exception:
         pass
     
-    # Отправляем новое с аватаркой и кнопкой "Я не робот"
-    if BOT_AVATAR and os.path.exists(BOT_AVATAR):
-        try:
-            photo = FSInputFile(BOT_AVATAR)
-            await callback.message.answer_photo(
-                photo=photo,
-                caption=TEXTS[lang]["confirm_bot"],
-                reply_markup=kb_confirm_human(lang)
-            )
-        except Exception as e:
-            logger.error(f"Ошибка отправки фото: {e}")
-            await callback.message.answer(
-                TEXTS[lang]["confirm_bot"],
-                reply_markup=kb_confirm_human(lang)
-            )
-    else:
-        await callback.message.answer(
-            TEXTS[lang]["confirm_bot"],
-            reply_markup=kb_confirm_human(lang)
-        )
+    await send_with_photo(
+        callback.message,
+        TEXTS[lang]["confirm_bot"],
+        reply_markup=kb_confirm_human(lang)
+    )
 
 @router.callback_query(F.data == "confirm_human")
 async def process_confirm_human(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     
     if not BOT_ENABLED:
-        await callback.message.answer(TEXTS["ru"]["bot_disabled"])
+        await send_with_photo(callback.message, TEXTS["ru"]["bot_disabled"])
         return
     
     data = await state.get_data()
@@ -763,22 +817,22 @@ async def appeal_yes(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     
     if not BOT_ENABLED:
-        await callback.message.answer(TEXTS["ru"]["bot_disabled"])
+        await send_with_photo(callback.message, TEXTS["ru"]["bot_disabled"])
         return
     
     user_id = callback.from_user.id
     
     if user_id not in BANNED_USERS:
-        await callback.message.answer("Вы не в бане")
+        await send_with_photo(callback.message, "Вы не в бане")
         return
     
     if BANNED_USERS[user_id].get("permanent", False):
-        await callback.message.answer("Вы в вечном бане, апелляция невозможна")
+        await send_with_photo(callback.message, "Вы в вечном бане, апелляция невозможна")
         return
     
     if BANNED_USERS[user_id].get("appeal_sent", False):
         lang = BANNED_USERS[user_id].get("lang", "ru")
-        await callback.message.answer(TEXTS[lang]["appeal_already_sent"])
+        await send_with_photo(callback.message, TEXTS[lang]["appeal_already_sent"])
         return
     
     data = await state.get_data()
@@ -789,11 +843,13 @@ async def appeal_yes(callback: CallbackQuery, state: FSMContext) -> None:
     except Exception:
         pass
     
-    sent = await callback.message.answer(
+    sent = await send_with_photo(
+        callback.message,
         TEXTS[lang]["appeal_prompt"],
         reply_markup=kb_back_to_menu(lang)
     )
-    await state.update_data(msg_id=sent.message_id)
+    if sent:
+        await state.update_data(msg_id=sent.message_id)
     await state.set_state(AppealForm.waiting_appeal_text)
 
 @router.callback_query(F.data == "appeal_no")
@@ -801,25 +857,23 @@ async def appeal_no(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     
     if not BOT_ENABLED:
-        await callback.message.answer(TEXTS["ru"]["bot_disabled"])
+        await send_with_photo(callback.message, TEXTS["ru"]["bot_disabled"])
         return
     
     data = await state.get_data()
     lang = data.get("lang", "ru")
     
-    # Удаляем сообщение с кнопками
     try:
         await callback.message.delete()
     except Exception:
         pass
     
-    # Показываем главное меню
     await show_main_menu(callback.message, state)
 
 @router.message(AppealForm.waiting_appeal_text, F.text)
 async def process_appeal(message: Message, state: FSMContext) -> None:
     if not BOT_ENABLED:
-        await message.answer(TEXTS["ru"]["bot_disabled"])
+        await send_with_photo(message, TEXTS["ru"]["bot_disabled"])
         return
     
     data = await state.get_data()
@@ -835,11 +889,10 @@ async def process_appeal(message: Message, state: FSMContext) -> None:
     user = message.from_user
     
     if user.id not in BANNED_USERS:
-        await message.answer("❌ Вы не в бане")
+        await send_with_photo(message, "❌ Вы не в бане")
         await state.clear()
         return
     
-    # Сохраняем апелляцию
     aid = next_appeal_id()
     APPEALS[aid] = {
         "user_id": user.id,
@@ -852,14 +905,14 @@ async def process_appeal(message: Message, state: FSMContext) -> None:
     BANNED_USERS[user.id]["appeal_sent"] = True
     BANNED_USERS[user.id]["appeal_id"] = aid
     
-    await message.bot.edit_message_text(
+    await send_with_photo(
+        message,
         TEXTS[lang]["appeal_sent"],
-        chat_id=message.chat.id,
-        message_id=msg_id,
-        reply_markup=kb_back_to_menu(lang)
+        reply_markup=kb_back_to_menu(lang),
+        edit_msg_id=msg_id,
+        chat_id=message.chat.id
     )
     
-    # Отправляем уведомление модераторам
     try:
         await message.bot.send_message(
             MOD_CHAT_ID,
@@ -890,7 +943,7 @@ async def menu_back(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     
     if not BOT_ENABLED:
-        await callback.message.answer(TEXTS["ru"]["bot_disabled"])
+        await send_with_photo(callback.message, TEXTS["ru"]["bot_disabled"])
         return
     
     data = await state.get_data()
@@ -911,7 +964,7 @@ async def menu_report(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     
     if not BOT_ENABLED:
-        await callback.message.answer(TEXTS["ru"]["bot_disabled"])
+        await send_with_photo(callback.message, TEXTS["ru"]["bot_disabled"])
         return
     
     user_id = callback.from_user.id
@@ -919,12 +972,12 @@ async def menu_report(callback: CallbackQuery, state: FSMContext) -> None:
     lang = data.get("lang", "ru")
     
     if user_id in BANNED_USERS:
-        await callback.message.answer(TEXTS[lang]["banned"])
+        await send_with_photo(callback.message, TEXTS[lang]["banned"])
         return
     
     remaining = get_cooldown_remaining_minutes(user_id)
     if remaining > 0:
-        await callback.message.answer(TEXTS[lang]["cooldown"].format(minutes=remaining))
+        await send_with_photo(callback.message, TEXTS[lang]["cooldown"].format(minutes=remaining))
         return
     
     try:
@@ -932,8 +985,13 @@ async def menu_report(callback: CallbackQuery, state: FSMContext) -> None:
     except Exception:
         pass
     
-    sent = await callback.message.answer(TEXTS[lang]["enter_link"], reply_markup=kb_back_to_menu(lang))
-    await state.update_data(msg_id=sent.message_id)
+    sent = await send_with_photo(
+        callback.message,
+        TEXTS[lang]["enter_link"],
+        reply_markup=kb_back_to_menu(lang)
+    )
+    if sent:
+        await state.update_data(msg_id=sent.message_id)
     await state.set_state(ReportForm.link)
 
 @router.callback_query(F.data == "menu_question")
@@ -941,14 +999,14 @@ async def menu_question(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     
     if not BOT_ENABLED:
-        await callback.message.answer(TEXTS["ru"]["bot_disabled"])
+        await send_with_photo(callback.message, TEXTS["ru"]["bot_disabled"])
         return
     
     data = await state.get_data()
     lang = data.get("lang", "ru")
     
     if callback.from_user.id in BANNED_USERS:
-        await callback.message.answer(TEXTS[lang]["banned"])
+        await send_with_photo(callback.message, TEXTS[lang]["banned"])
         return
     
     try:
@@ -956,14 +1014,19 @@ async def menu_question(callback: CallbackQuery, state: FSMContext) -> None:
     except Exception:
         pass
     
-    sent = await callback.message.answer(TEXTS[lang]["question_prompt"], reply_markup=kb_back_to_menu(lang))
-    await state.update_data(msg_id=sent.message_id)
+    sent = await send_with_photo(
+        callback.message,
+        TEXTS[lang]["question_prompt"],
+        reply_markup=kb_back_to_menu(lang)
+    )
+    if sent:
+        await state.update_data(msg_id=sent.message_id)
     await state.set_state(QuestionForm.question)
 
 @router.message(ReportForm.link, F.text)
 async def process_link(message: Message, state: FSMContext) -> None:
     if not BOT_ENABLED:
-        await message.answer(TEXTS["ru"]["bot_disabled"])
+        await send_with_photo(message, TEXTS["ru"]["bot_disabled"])
         return
     
     data = await state.get_data()
@@ -977,15 +1040,17 @@ async def process_link(message: Message, state: FSMContext) -> None:
     except Exception:
         pass
 
-    await message.bot.edit_message_text(
+    await send_with_photo(
+        message,
         TEXTS[lang]["enter_reason"],
-        chat_id=message.chat.id,
-        message_id=msg_id
+        reply_markup=None,
+        edit_msg_id=msg_id,
+        chat_id=message.chat.id
     )
     await state.set_state(ReportForm.reason)
 
 @router.message(ReportForm.link)
-async def process_link_invalid(message: Message, state: FSMContext) -> None:
+async def process_link_invalid(message: Message) -> None:
     try:
         await message.delete()
     except Exception:
@@ -994,7 +1059,7 @@ async def process_link_invalid(message: Message, state: FSMContext) -> None:
 @router.message(ReportForm.reason, F.text)
 async def process_reason(message: Message, state: FSMContext) -> None:
     if not BOT_ENABLED:
-        await message.answer(TEXTS["ru"]["bot_disabled"])
+        await send_with_photo(message, TEXTS["ru"]["bot_disabled"])
         return
     
     data = await state.get_data()
@@ -1021,11 +1086,12 @@ async def process_reason(message: Message, state: FSMContext) -> None:
         "mod_msg_id": None,
     }
 
-    await message.bot.edit_message_text(
+    await send_with_photo(
+        message,
         TEXTS[lang]["sent"],
-        chat_id=message.chat.id,
-        message_id=msg_id,
-        reply_markup=kb_back_to_menu(lang)
+        reply_markup=kb_back_to_menu(lang),
+        edit_msg_id=msg_id,
+        chat_id=message.chat.id
     )
     await state.clear()
     await state.update_data(lang=lang)
@@ -1044,7 +1110,7 @@ async def process_reason(message: Message, state: FSMContext) -> None:
         logger.error(f"❌ Ошибка отправки модераторам: {e}")
 
 @router.message(ReportForm.reason)
-async def process_reason_invalid(message: Message, state: FSMContext) -> None:
+async def process_reason_invalid(message: Message) -> None:
     try:
         await message.delete()
     except Exception:
@@ -1053,7 +1119,7 @@ async def process_reason_invalid(message: Message, state: FSMContext) -> None:
 @router.message(QuestionForm.question, F.text)
 async def process_question(message: Message, state: FSMContext) -> None:
     if not BOT_ENABLED:
-        await message.answer(TEXTS["ru"]["bot_disabled"])
+        await send_with_photo(message, TEXTS["ru"]["bot_disabled"])
         return
     
     data = await state.get_data()
@@ -1077,11 +1143,12 @@ async def process_question(message: Message, state: FSMContext) -> None:
         "answered": False,
     }
 
-    await message.bot.edit_message_text(
+    await send_with_photo(
+        message,
         TEXTS[lang]["question_sent"],
-        chat_id=message.chat.id,
-        message_id=msg_id,
-        reply_markup=kb_back_to_menu(lang)
+        reply_markup=kb_back_to_menu(lang),
+        edit_msg_id=msg_id,
+        chat_id=message.chat.id
     )
     await state.clear()
     await state.update_data(lang=lang)
@@ -1102,7 +1169,7 @@ async def process_question(message: Message, state: FSMContext) -> None:
         logger.error(f"❌ Ошибка отправки вопроса модераторам: {e}")
 
 @router.message(QuestionForm.question)
-async def process_question_invalid(message: Message, state: FSMContext) -> None:
+async def process_question_invalid(message: Message) -> None:
     try:
         await message.delete()
     except Exception:
@@ -1177,7 +1244,6 @@ async def cmd_msg(message: Message) -> None:
     lang = "ru"
     text = message.text
     
-    # Парсим команду: /msg ID Текст
     parts = text.split(maxsplit=2)
     if len(parts) < 3:
         await message.answer(TEXTS[lang]["msg_invalid"])
@@ -1191,9 +1257,11 @@ async def cmd_msg(message: Message) -> None:
         return
     
     try:
-        await message.bot.send_message(
-            user_id,
-            TEXTS[lang]["msg_from_mod"].format(text=msg_text)
+        # Отправляем с фото пользователю
+        await send_with_photo(
+            message,
+            TEXTS[lang]["msg_from_mod"].format(text=msg_text),
+            chat_id=user_id
         )
         await message.answer(TEXTS[lang]["msg_sent"].format(user_id=user_id))
         logger.info(f"📨 Модератор отправил сообщение пользователю {user_id}")
@@ -1224,7 +1292,11 @@ async def process_broadcast(message: Message, state: FSMContext) -> None:
     
     for user_id in ALL_USERS:
         try:
-            await message.bot.send_message(user_id, text)
+            await send_with_photo(
+                message,
+                text,
+                chat_id=user_id
+            )
             success_count += 1
             await asyncio.sleep(0.05)
         except Exception:
@@ -1295,7 +1367,11 @@ async def ban_unban_user(callback: CallbackQuery) -> None:
         del BANNED_USERS[user_id]
         
         try:
-            await callback.bot.send_message(user_id, TEXTS[lang]["unbanned"])
+            await send_with_photo(
+                callback.message,
+                TEXTS[lang]["unbanned"],
+                chat_id=user_id
+            )
         except Exception:
             pass
         
@@ -1331,7 +1407,11 @@ async def appeal_approve(callback: CallbackQuery) -> None:
         del APPEALS[aid]
     
     try:
-        await callback.bot.send_message(user_id, TEXTS[lang]["appeal_approved"])
+        await send_with_photo(
+            callback.message,
+            TEXTS[lang]["appeal_approved"],
+            chat_id=user_id
+        )
         await callback.message.edit_text(
             f"✅ Апелляция #{aid} одобрена\nПользователь {appeal['name']} разблокирован"
         )
@@ -1360,7 +1440,11 @@ async def appeal_reject(callback: CallbackQuery) -> None:
         del APPEALS[aid]
     
     try:
-        await callback.bot.send_message(user_id, TEXTS[lang]["appeal_rejected"])
+        await send_with_photo(
+            callback.message,
+            TEXTS[lang]["appeal_rejected"],
+            chat_id=user_id
+        )
         await callback.message.edit_text(
             f"❌ Апелляция #{aid} отклонена\nПользователь {appeal['name']} отправлен в вечный бан"
         )
@@ -1383,7 +1467,11 @@ async def mod_approve(callback: CallbackQuery) -> None:
     lang = r.get("lang", "ru")
     
     try:
-        await callback.bot.send_message(r["user_id"], TEXTS[lang]["approved"])
+        await send_with_photo(
+            callback.message,
+            TEXTS[lang]["approved"],
+            chat_id=r["user_id"]
+        )
         r["status"] = "approved"
         
         await callback.message.edit_text(
@@ -1430,9 +1518,10 @@ async def process_reject_reason(message: Message, state: FSMContext) -> None:
     reason = message.text.strip()
     
     try:
-        await message.bot.send_message(
-            r["user_id"], 
-            TEXTS[lang]["rejected_with_msg"].format(msg=reason)
+        await send_with_photo(
+            message,
+            TEXTS[lang]["rejected_with_msg"].format(msg=reason),
+            chat_id=r["user_id"]
         )
         r["status"] = "rejected"
         
@@ -1479,10 +1568,11 @@ async def mod_ban(callback: CallbackQuery) -> None:
     }
 
     try:
-        await callback.bot.send_message(
-            user_id,
+        await send_with_photo(
+            callback.message,
             TEXTS[lang]["banned"],
-            reply_markup=kb_appeal(lang)
+            reply_markup=kb_appeal(lang),
+            chat_id=user_id
         )
     except Exception as e:
         logger.error(f"Ошибка отправки уведомления о бане: {e}")
@@ -1510,7 +1600,11 @@ async def mod_unban(callback: CallbackQuery) -> None:
     if user_id in BANNED_USERS:
         del BANNED_USERS[user_id]
         try:
-            await callback.bot.send_message(user_id, TEXTS[lang]["unbanned"])
+            await send_with_photo(
+                callback.message,
+                TEXTS[lang]["unbanned"],
+                chat_id=user_id
+            )
         except Exception:
             pass
 
@@ -1559,9 +1653,10 @@ async def process_question_reply(message: Message, state: FSMContext) -> None:
     answer = message.text.strip()
     
     try:
-        await message.bot.send_message(
-            q["user_id"],
-            TEXTS[lang]["question_reply_format"].format(answer=answer)
+        await send_with_photo(
+            message,
+            TEXTS[lang]["question_reply_format"].format(answer=answer),
+            chat_id=q["user_id"]
         )
         q["answered"] = True
         
