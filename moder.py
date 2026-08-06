@@ -1023,18 +1023,10 @@ async def menu_question(callback: CallbackQuery, state: FSMContext) -> None:
         await state.update_data(msg_id=sent.message_id)
     await state.set_state(QuestionForm.question)
 
-# ============ ОБРАБОТКА ВВОДА ССЫЛКИ ============
+# ============ ОБРАБОТКА ВВОДА ССЫЛКИ (ИСПРАВЛЕНА) ============
 
-@router.message(ReportForm.link)
+@router.message(ReportForm.link, F.text)
 async def process_link(message: Message, state: FSMContext) -> None:
-    # Этот хендлер срабатывает на ЛЮБОЕ сообщение, когда мы в состоянии ReportForm.link
-    if not message.text:
-        try:
-            await message.delete()
-        except Exception:
-            pass
-        return
-    
     if not BOT_ENABLED:
         await send_with_photo(message, TEXTS["ru"]["bot_disabled"])
         return
@@ -1050,7 +1042,7 @@ async def process_link(message: Message, state: FSMContext) -> None:
     except Exception:
         pass
 
-    # Редактируем сообщение с фото - меняем caption
+    # Редактируем сообщение - меняем текст
     if BOT_AVATAR and os.path.exists(BOT_AVATAR):
         try:
             photo = FSInputFile(BOT_AVATAR)
@@ -1062,7 +1054,7 @@ async def process_link(message: Message, state: FSMContext) -> None:
                 reply_markup=kb_back_to_menu(lang)
             )
         except Exception as e:
-            logger.error(f"Ошибка редактирования фото: {e}")
+            logger.error(f"Ошибка редактирования: {e}")
             await message.bot.edit_message_text(
                 TEXTS[lang]["enter_reason"],
                 chat_id=message.chat.id,
@@ -1079,18 +1071,10 @@ async def process_link(message: Message, state: FSMContext) -> None:
     
     await state.set_state(ReportForm.reason)
 
-# ============ ОБРАБОТКА ВВОДА ПРИЧИНЫ ============
+# ============ ОБРАБОТКА ВВОДА ПРИЧИНЫ (ИСПРАВЛЕНА) ============
 
-@router.message(ReportForm.reason)
+@router.message(ReportForm.reason, F.text)
 async def process_reason(message: Message, state: FSMContext) -> None:
-    # Этот хендлер срабатывает на ЛЮБОЕ сообщение, когда мы в состоянии ReportForm.reason
-    if not message.text:
-        try:
-            await message.delete()
-        except Exception:
-            pass
-        return
-    
     if not BOT_ENABLED:
         await send_with_photo(message, TEXTS["ru"]["bot_disabled"])
         return
@@ -1119,7 +1103,7 @@ async def process_reason(message: Message, state: FSMContext) -> None:
         "mod_msg_id": None,
     }
 
-    # Редактируем сообщение с фото - меняем caption
+    # Редактируем сообщение - меняем текст
     if BOT_AVATAR and os.path.exists(BOT_AVATAR):
         try:
             photo = FSInputFile(BOT_AVATAR)
@@ -1131,7 +1115,7 @@ async def process_reason(message: Message, state: FSMContext) -> None:
                 reply_markup=kb_back_to_menu(lang)
             )
         except Exception as e:
-            logger.error(f"Ошибка редактирования фото: {e}")
+            logger.error(f"Ошибка редактирования: {e}")
             await message.bot.edit_message_text(
                 TEXTS[lang]["sent"],
                 chat_id=message.chat.id,
@@ -1162,18 +1146,10 @@ async def process_reason(message: Message, state: FSMContext) -> None:
     except Exception as e:
         logger.error(f"❌ Ошибка отправки модераторам: {e}")
 
-# ============ ОБРАБОТКА ВВОДА ВОПРОСА ============
+# ============ ОБРАБОТКА ВВОДА ВОПРОСА (ИСПРАВЛЕНА) ============
 
-@router.message(QuestionForm.question)
+@router.message(QuestionForm.question, F.text)
 async def process_question(message: Message, state: FSMContext) -> None:
-    # Этот хендлер срабатывает на ЛЮБОЕ сообщение, когда мы в состоянии QuestionForm.question
-    if not message.text:
-        try:
-            await message.delete()
-        except Exception:
-            pass
-        return
-    
     if not BOT_ENABLED:
         await send_with_photo(message, TEXTS["ru"]["bot_disabled"])
         return
@@ -1199,7 +1175,7 @@ async def process_question(message: Message, state: FSMContext) -> None:
         "answered": False,
     }
 
-    # Редактируем сообщение с фото - меняем caption
+    # Редактируем сообщение - меняем текст
     if BOT_AVATAR and os.path.exists(BOT_AVATAR):
         try:
             photo = FSInputFile(BOT_AVATAR)
@@ -1211,7 +1187,7 @@ async def process_question(message: Message, state: FSMContext) -> None:
                 reply_markup=kb_back_to_menu(lang)
             )
         except Exception as e:
-            logger.error(f"Ошибка редактирования фото: {e}")
+            logger.error(f"Ошибка редактирования: {e}")
             await message.bot.edit_message_text(
                 TEXTS[lang]["question_sent"],
                 chat_id=message.chat.id,
