@@ -82,7 +82,7 @@ WEB_SERVER_PORT = int(os.getenv("PORT", "10000"))
 
 # ID чата модераторов (запасное значение — переопределяется автоматически
 # при старте по MOD_CHAT_USERNAME, если тот указан и доступен)
-MOD_CHAT_ID = -4449890243a
+MOD_CHAT_ID = -4449890243
 MOD_CHAT_USERNAME = os.getenv("MOD_CHAT_USERNAME", "xxxnxcombogenyaoep1488").lstrip("@")
 
 def is_mod_chat(message: Message) -> bool:
