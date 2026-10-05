@@ -1,5 +1,5 @@
 """
-сам пошел нахуй сын шлюхи дрявой by forgetcff
+сам пошел нахуй сышлюхи дрявой by forgetcff
 """
 
 import asyncio
